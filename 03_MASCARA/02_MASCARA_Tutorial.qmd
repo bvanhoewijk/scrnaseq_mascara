@@ -1,0 +1,180 @@
+---
+title: "MASCARA: Coexpression Analysis Tutorial"
+author: "Fred White"
+date: '`r format(Sys.time(), "%d %B, %Y")`'
+output: 
+  html_document
+---
+
+# 1 Load libraries
+
+## 1.2 Clean environment and load libraries and code
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = F, message = F)
+rm(list=ls())
+gc()
+```
+
+```{r, echo=FALSE}
+library(devtools)
+library(ggplot2)
+#library(MetStaT)
+library(gASCA)
+library(patchwork)
+library(readxl)
+library(ggfortify)
+library(ggrepel)
+library(grid)
+library(gridExtra)
+library(tidyr)
+library(tidyverse)
+library(reshape2)
+library(scales)
+library(matrixStats)
+library(DESeq2)
+library(MASS)
+library(glmnet)
+library(doParallel)    
+library(MUVR) 
+library(pheatmap)
+library(caret)
+library(data.table)
+library(plotly)
+library(mixOmics)
+#library(DiscriMiner)
+library(pracma)
+library(matlib)
+library(truncnorm)
+library(pls)
+
+
+source("code/DATA_SIM_FUNCS.R")
+source("code/MASCARA_FUNCS.R")
+```
+
+# 2 Create simulated dataset
+
+Here we show a typical use case of MASCARA applied to a simulated dataset.
+
+User must supply a dataframe of filtered + transformed data plus associated metadata, with samples in the rows and genes in the columns.
+
+```{r}
+meta <- cbind.data.frame(rep(c(1,-1), each = 12), 
+                         rep(c(1:4), each = 3), 
+                         rep(c(-1:-4,1:4), each = 3))
+colnames(meta) <- c("growth_condition","time","interaction")
+meta <- as.data.frame(apply(meta,2,factor))  
+knitr::kable(head(meta))
+```
+
+## 2.1 Plot distribution of data
+
+Data is assumed to be approximately normally distributed:
+
+```{r setting simulation parameters}
+Experiment_responders <- 30
+
+set.seed(3)
+
+baits <- paste0("X_",c(1985:1988))  
+spikes <- paste0("X_",c(1989:2000))
+
+sim_data <- Create_Core_DEV_2(nreps = 3, meta = meta, plot = TRUE, 
+                        EffectSize = c(X_a_ab = 1.8, time = 1, E = 10, mu = 1, Struc_E = 1), 
+                        struc_resid = TRUE, e_sigma = c(1.5,0.8,0.0), a_sigma = c(1,0.7,0.6,0.1),
+                        b_sigma = c(1,0.9), irr_spikes = TRUE, SCORE_SEED = 12, 
+                        Experiment_responders = Experiment_responders, struc_seed = 127)[[1]]
+hist(sim_data)
+```
+
+# 3 ASCA
+
+## 3.1 Define and calculate ASCA model
+
+We calculate an ASCA model on the data to partition the experimental and residual variance:
+
+```{r}
+ar <- ASCA_decompose(d = meta[,1:2], 
+                     x = sim_data, 
+                     f = "growth_condition + time + growth_condition:time")
+resids <- ar$residuals
+```
+
+## 3.2 Correlated baits
+
+Before continuing it is a good idea to check that the set of baits are indeed correlated in the residual variance:
+
+```{r}
+cor(resids[,which(colnames(resids) %in% baits)])
+```
+
+In this case they are, in the case of real data we expect these values to be somewhat lower (values \~ 0.6 are reason enough to continue).
+
+Another sanity check at this stage is to look at the baits residual variance against eachother:
+
+```{r}
+
+correl <- cor(resids[,baits[1]], resids[,baits[2]])
+plot(resids[,baits[1]], resids[,baits[2]], main=paste0("Cor: ", round(correl, 2)))
+
+```
+
+We can see above that there is a relationship between the examples.
+
+## 3.3 PLS2 model fitting with baits
+
+From here we take the residuals and calculate a PLS2 model with a predefined set of baits using the SIMPLS algorithm:
+
+```{r}
+
+spls_res <- simpls.fit(resids[,-which(colnames(resids) %in% baits)],
+                          resids[,which(colnames(resids) %in% baits)], ncomp = 2)
+  
+```
+
+## 3.4 Select features
+
+Selecting features with $\mathbf{\bar{q}}$ target projection:
+
+```{r}
+q_bar <- colMeans(spls_res$Yloadings)
+R <- spls_res$projection
+R_TP <- (dot(t(R),q_bar)/dot(q_bar,q_bar))
+  
+Candidates <- as.data.frame(R_TP[order(R_TP, decreasing = TRUE)])
+```
+
+Now we have our ordered candidate list, top of the list represents features that have the strongest positive association with the baits.
+
+```{r}
+head(Candidates)
+```
+
+```{r}
+head(rownames(Candidates))
+```
+
+# 4 Plot
+
+## 4.1 Bait vs Candidate (spike-in)
+
+```{r}
+library(scales)
+name1 <- rownames(Candidates)[1]
+name2 <- baits[1]
+resids_t <- t(resids)
+# Corrected counts (residuals)
+df1 <- data.frame(gene1=resids_t[name1, ], 
+                  gene2=resids_t[name2, ])
+cor1 <- round(cor(df1$gene1, df1$gene2),2)
+
+
+# P1
+p1 <- ggplot(data=df1, aes(gene1, gene2)) + 
+  geom_point(alpha = 0.5) + 
+  xlab(name1) + 
+  ylab(name2) +
+  ggtitle(paste0("Corrected counts (residuals)\ncorr:", cor1)) + theme(legend.position = "none")
+p1
+```

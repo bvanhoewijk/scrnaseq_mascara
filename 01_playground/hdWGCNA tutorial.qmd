@@ -1,0 +1,9 @@
+---
+title: "hdWGCNA tutorial"
+format: html
+editor: visual
+---
+
+```{bash}
+wget https://swaruplab.bio.uci.edu/public_data/Zhou_2020.rds
+```

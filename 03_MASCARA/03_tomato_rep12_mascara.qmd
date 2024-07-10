@@ -1,0 +1,574 @@
+---
+title: "tomato_rep12_mascara"
+format: html
+editor: visual
+---
+
+# 1. Clean env and load packages
+
+```{r}
+rm(list=ls())
+gc()
+library(devtools)
+library(ggplot2)
+#library(MetStaT)
+library(gASCA)
+library(patchwork)
+library(readxl)
+library(ggfortify)
+library(ggrepel)
+library(grid)
+library(gridExtra)
+library(tidyr)
+library(tidyverse)
+library(reshape2)
+library(scales)
+library(matrixStats)
+library(DESeq2)
+library(MASS)
+library(glmnet)
+library(doParallel)    
+library(MUVR) 
+library(pheatmap)
+library(caret)
+library(data.table)
+library(plotly)
+library(mixOmics)
+#library(DiscriMiner)
+library(pracma)
+library(matlib)
+library(truncnorm)
+library(pls)
+library(Seurat)
+
+
+source("code/DATA_SIM_FUNCS.R")
+source("code/MASCARA_FUNCS.R")
+```
+
+## 1.1 Load data
+
+```{r}
+# pbmc <- readRDS("../02_scRNA_analysis/data/single_cell_pbmc.rds")
+pbmc <- readRDS("../02_scRNA_analysis/data/pbmc_with_scina.rds")
+```
+
+```{r}
+colnames(pbmc@meta.data)
+```
+
+# 2. Summary statistics
+
+## 2.1 Dotplots
+
+To make sure we loaded the right data
+
+```{r}
+fig2e_genes <- c("Solyc05g051550","Solyc09g083050","Solyc03g005320","Solyc01g094750","Solyc02g014730","Solyc01g095750","Solyc01g094700","Solyc04g011600","Solyc06g074390","Solyc11g067180","Solyc03g097500","Solyc05g054890","Solyc09g065420","Solyc03g115960")
+found <- c()
+for(bait in fig2e_genes){
+  found <- c(found, rownames(pbmc)[grep(bait, rownames(pbmc))])
+  
+}
+for(item in c("chisquare", "scsorter", "sctype_classification", "SCINA")){
+  Idents(pbmc) <- item
+  p <- DotPlot(pbmc, features=found, scale=TRUE,) + RotatedAxis() + coord_flip() + ggtitle(item)
+  plot(p)
+}
+
+```
+
+```{r}
+# SlMYB41, SlMYB62, SlMYB92, SlASFT 
+suberin_tf <- c("Solyc07g054840", "Solyc03g119370", "Solyc05g051550", "Solyc03g097500")
+found <- c()
+for(bait in suberin_tf){
+  found <- c(found, rownames(pbmc)[grep(bait, rownames(pbmc))])
+  
+}
+for(item in c("chisquare", "scsorter", "sctype_classification", "SCINA")){
+  Idents(pbmc) <- item
+  p <- DotPlot(pbmc, features=found, scale=TRUE,) + RotatedAxis() + coord_flip() + ggtitle(item)
+  plot(p)
+}
+
+```
+
+## 2.2 Object overview and numbers
+
+```{r}
+colnames(pbmc@meta.data)
+```
+
+```{r}
+head(pbmc@meta.data)
+```
+
+How many cells per replicate are left after QC and *thorough* filtering:
+
+```{r}
+table(pbmc@meta.data$orig.ident)
+```
+
+## 2.3 Filter data again
+
+-   Get an overview of missing data per gene.
+
+-   Get an overview of missing data per gene per tissue type
+
+Make sure that the baits are not lost.
+
+### 2.3.1 Filter on counts per gene
+
+```{r}
+DefaultAssay(pbmc) <- "SCT"
+counts <- GetAssayData(pbmc)
+```
+
+```{r}
+null_counter <- function(x){
+  (sum(x < 0.1)/length(x))
+}
+# 91% of cells have no data for the first gene:
+null_counter(counts[1,])
+```
+
+```{r}
+res <- data.frame(row.names=rownames(pbmc))
+for(type in unique(pbmc@meta.data$SCINA)){
+  tissue_expression <- counts[,pbmc@meta.data$SCINA == type]
+  res[type] <- apply(tissue_expression, 1, null_counter)
+}
+res <- data.table(res, keep.rownames = TRUE)
+
+# Don't consider "unknown" category:
+res2 <- res[, -c("unknown")]
+head(res2)
+```
+
+```{r}
+test_counter <- function(x){
+  sum(x == 0) / length(x)  
+}
+
+good_gene <- apply(counts, 1, test_counter)
+good_cell <- apply(counts, 2, test_counter)
+```
+
+```{r}
+hist(good_gene, breaks=seq(0, 1.0, 0.01), main="Missing data genes", xlab="Fraction missing")
+```
+
+```{r}
+hist(good_cell, breaks=seq(0, 1.0, 0.01), main="Missing data cells", xlab="Fraction missing")
+```
+
+Subset genes:
+
+```{r}
+# Genes must be present in at least 0.5% of the cells:
+good <- good_gene < 0.995
+table(good)
+```
+
+# 3. MASCARA
+
+## 3.1 Prep MASCARA dataframes
+
+```{r}
+# pbmc <- FindVariableFeatures(pbmc, nfeatures = 10000)
+# topgenes <- VariableFeatures(pbmc, nfeatures = 10000)
+
+topgenes <- rownames(pbmc)[good]
+topgenes <- gsub(pattern="\\..*", "", topgenes)
+topgenes <- gsub(pattern="^gene:", "", topgenes)
+```
+
+```{r}
+DefaultAssay(pbmc) <- "SCT"
+counts <- GetAssayData(pbmc)
+```
+
+```{r}
+rownames(counts) <- gsub(pattern="\\..*", "", rownames(counts))
+rownames(counts) <- gsub(pattern="^gene:", "", rownames(counts))
+counts.sub <- counts[rownames(counts) %in% topgenes,]
+```
+
+Genes / Cells:
+
+```{r}
+cat("Genes: ", dim(counts.sub)[1], "\n")
+cat("Cells: ", dim(counts.sub)[2], "\n")
+```
+
+```{r}
+table(fig2e_genes %in% rownames(counts.sub))
+```
+
+## 3.2 Limit amount of cells to use
+
+```{r}
+# Subset cells
+# Do not subset cells:
+num_cells <- ncol(counts.sub) #15000
+counts.sub <- counts.sub[,1:num_cells]
+```
+
+```{r}
+meta.sub <- pbmc@meta.data[1:num_cells,]
+table(meta.sub[['SCINA']])
+```
+
+```{r}
+cat(nrow(counts.sub), "genes", "\n")
+cat(ncol(counts.sub), "cells", "\n")
+```
+
+```{r}
+to_keep <- meta.sub$SCINA != "unknown"
+counts.sub <- counts.sub[, to_keep]
+meta.sub   <- meta.sub[to_keep,]
+
+cat(nrow(counts.sub), "genes", "\n")
+cat(ncol(counts.sub), "cells", "\n")
+```
+
+```{r}
+baits <- rownames(counts.sub)[rownames(counts.sub) %in% fig2e_genes]
+baits
+```
+
+```{r}
+dim(counts.sub)
+```
+
+```{r}
+hist(as.matrix(counts.sub))
+```
+
+## 3.3 MASCARA
+
+```{r}
+meta <- data.frame(scsorter=meta.sub$scsorter, 
+                   seurat=meta.sub$seurat_clusters, 
+                   chisquare=meta.sub$chisquare, 
+                   sctype=meta.sub$sctype,
+                   SCINA=meta.sub$SCINA)
+meta
+```
+
+Check if the dimensions are still good:
+
+```{r}
+print(dim(t(counts.sub))[1] == dim(meta)[1])
+```
+
+```{r}
+ar <- ASCA_decompose(d = meta, x = t(counts.sub), f = "SCINA")
+resids <- ar$residuals
+```
+
+```{r}
+cor(resids[,which(colnames(resids) %in% baits)])
+```
+
+From here we take the residuals and calculate a PLS2 model with a predefined set of baits using the SIMPLS algorithm:
+
+```{r}
+library(pls)
+spls_res <- simpls.fit(resids[,-which(colnames(resids) %in% baits[1:4])],
+                          resids[,which(colnames(resids) %in% baits[1:4])], ncomp = 2)
+```
+
+```{r}
+q_bar <- colMeans(spls_res$Yloadings)
+R <- spls_res$projection
+R_TP <- (dot(t(R),q_bar)/dot(q_bar,q_bar))
+  
+Candidates <- as.data.frame(R_TP[order(R_TP, decreasing = TRUE)])
+```
+
+## 3.4 Plot two genes
+
+```{r}
+# Transpose to make the 'gene expression' the same as
+# in the `expr` object
+resids_t <- t(resids)
+```
+
+```{r, fig.width=8, fig.height=4}
+library(scales)
+name1 <- rownames(Candidates)[2]
+name2 <- baits[1]
+
+# Corrected counts (residuals)
+df1 <- data.frame(gene1=resids_t[name1, ], 
+                  gene2=resids_t[name2, ], 
+                  Celltype = meta.sub$SCINA)
+cor1 <- round(cor(df1$gene1, df1$gene2),2)
+
+# Normalized + transformed counts:
+df2 <- data.frame(gene1=counts.sub[name1, ], 
+                  gene2=counts.sub[name2, ], 
+                  Celltype = meta.sub$SCINA)
+cor2 <- round(cor(df2$gene1, df2$gene2),2)
+
+
+# P1
+p1 <- ggplot(data=df1, aes(gene1, gene2)) + 
+  geom_point(aes(colour=Celltype), alpha = 0.5) + 
+  xlab(name1) + 
+  ylab(name2) +
+  ggtitle(paste0("Residuals of gene expression\ncorr:", cor1)) + 
+  theme(legend.position = "none")
+
+# P2
+p2 <- ggplot(data=df2, aes(gene1, gene2)) + 
+  geom_point(aes(colour=Celltype), alpha = 0.5) + 
+  xlab(name1) + 
+  ylab(name2) +
+  ggtitle(paste0("Gene expression \ncorr:", cor2))+ 
+  theme(legend.position = "none")
+
+
+p1+p2
+```
+
+```{r}
+df2[df2$gene1 > 0 & df2$gene2 > 0,]
+```
+
+```{r, fig.width=5, fig.height=5}
+# Create color list of top20:
+cols <- rep(1, nrow(R))
+top20 <- rownames(Candidates)[1:20]
+
+cols[rownames(R) %in% top20] <- 2
+plot(R[, 1], R[,2], pch=19, col=cols)
+```
+
+Show index number of rest of baits in Candidates list:
+
+```{r}
+i <- 0
+for(bait in baits){
+  if(bait %in% rownames(Candidates)){
+    index <- grep(bait, rownames(Candidates))
+    cat(paste0("Bait ", bait, " (",i,") found at rank ", index), "\n") 
+  }else{
+    cat(paste0("Bait ", bait, " (",i,") not found"), "\n") 
+  }
+  i <- i+1
+}
+```
+
+```{r}
+rownames(Candidates)[1]
+```
+
+## 3.5 DotPlot the top 10 genes per tissue-type
+
+```{r}
+found <- c()
+# make a list with the top 10 candidates
+for(bait in head(rownames(Candidates),2)){
+  found <- c(found, rownames(pbmc)[grep(bait, rownames(pbmc))])
+  
+}
+# # Add the baits from the figure
+for(bait in fig2e_genes){
+  found <- c(found, rownames(pbmc)[grep(bait, rownames(pbmc))])
+}
+# Unique the list:
+found <- unique(found)
+
+# Plot the data using the SCINA annotations:
+Idents(pbmc) <- "SCINA"
+p <- DotPlot(pbmc, features=found, scale=TRUE,) + 
+  RotatedAxis() + 
+  coord_flip() + 
+  ggtitle("SCINA")
+
+plot(p)
+```
+
+```{r}
+for(gene in rownames(Candidates)[1:10]){
+  cat(gene, "\n")
+}
+
+```
+
+## 3.6 Jasmonic acid pathway
+
+```{r}
+library(pls)
+ja_pathway <- c("Solyc01g109140", "Solyc10g007960", "Solyc01g103390", 
+                "Solyc07g042170", "Solyc03g118540", "Solyc06g068930", 
+                "Solyc08g036640", "Solyc10g076670")
+
+ethylene_receptors <- c("Solyc08g081540", "Solyc02g091990", 
+                        "Solyc02g077370", "Solyc11g011750", 
+                        "Solyc01g090300", "Solyc09g075420")
+
+auxin_response <- c("Solyc06g084070", "Solyc07g048070", 
+                    "Solyc03g082520", "Solyc03g082530", 
+                    "Solyc06g005090", "Solyc06g007390", 
+                    "Solyc02g085910")
+
+aba_response <- c("Solyc11g065930", "Solyc03g095780", 
+                  "Solyc02g076770", "Solyc06g050500")
+
+ga_response <- c("Solyc01g079200", "Solyc07g061720", 
+                 "Solyc02g083870", "Solyc02g083880")
+
+found <- NULL
+for(bait in c(ja_pathway)){
+  found <- c(found, colnames(resids)[grep(bait, colnames(resids))])
+}
+```
+
+Before continuing it is a good idea to check that the set of baits are indeed correlated in the residual variance:
+
+```{r}
+cor(resids[,which(colnames(resids) %in% found)])
+```
+
+```{r}
+
+```
+
+# 4. Strigolactones
+
+### Strigolactones accumulate in the roots in response to heat and cold stresses
+
+To explore the role of strigolactones under extreme temperatures, a time course of the transcript levels of strigolactone biosynthesis (*CCD7*, *CCD8*, and *MAX1*) and signaling (*MAX2*) genes in the roots of wild-type tomato plants was carried out after the whole plants were transferred to hot (42 °C) or cold (4 °C) conditions. As shown in Fig. [1a](https://www.nature.com/articles/s41438-021-00668-y#Fig1), either high or low growth temperature significantly induced the transcription of *CCD7*, *CCD8*, *MAX1*, and *MAX2* in the roots at 3 h after heat or at 6 h after cold stress. Afterward, the transcript levels of these genes decreased gradually to levels similar to those before the stresses. Among the four genes examined, the increases in the transcript levels of *CCD7* and *CCD8* were more notable than those of *MAX1* and *MAX2* under either high- or low-temperature conditions. Additional experiments showed that transcript levels of strigolactone biosynthesis genes in the leaves were also induced in response to heat or cold stress, and the levels were, however, much lower than those in the roots under optimal growth conditions, and hot and cold conditions (Figs. [1a](https://www.nature.com/articles/s41438-021-00668-y#Fig1) and S[1](https://www.nature.com/articles/s41438-021-00668-y#MOESM1)). In addition, changes in the accumulation of three principal strigolactones, orobanchol, solanacol, and didehydro-orobanchol, in the roots were examined (Fig. [1b, c](https://www.nature.com/articles/s41438-021-00668-y#Fig1)). While the levels of orobanchol and didehydro-orobanchol were not significantly altered, solanacol significantly increased under either high- or low-temperature conditions by 68.7% at 3 h after heat stress and by 107.8% at 6 h after cold stress (Fig. [1b, c](https://www.nature.com/articles/s41438-021-00668-y#Fig1)). These results indicate that strigolactone biosynthesis is induced at the early stage of heat or cold stress.
+
+<https://www.nature.com/articles/s41438-021-00668-y>
+
+*NCED6*, 
+
+Solyc05g053530.1.1
+
+Solyc07g056570.1.1
+
+Solyc08g016720.1.1
+
+*Le4*, and *ABF4*
+
+| Col1              | Col2               |
+|-------------------|--------------------|
+| ccd7              | Solyc01g090660.2.1 |
+| ccd8              | Solyc08g066650.2.1 |
+| max1              | Solyc08g062950.4.1 |
+| max2 (signalling) | Solyc12g010900.1.1 |
+| max2 (signalling) | Solyc07g055120.4.1 |
+
+```{r}
+?DotPlot
+```
+
+```{r}
+found <- c()
+
+for(bait in c("Solyc11g005330", "Solyc01g090660", "Solyc08g066650", "Solyc08g062950", "Solyc12g010900", "Solyc11g066390", "Solyc01g111510", "Solyc09g091840", "Solyc08g081530", "Solyc05g054760", "Solyc03g026280", "Solyc03g026270", "Solyc04g011440", "Solyc12g015880", "Solyc05g053530", "Solyc02g084850", "Solyc11g044560")){
+  found <- c(found, rownames(pbmc)[grep(bait, rownames(pbmc))])
+}
+
+# Plot the data using the SCINA annotations:
+Idents(pbmc) <- "SCINA"
+p <- DotPlot(pbmc, features=found, scale=TRUE) + 
+  RotatedAxis() + 
+  coord_flip() + 
+  ggtitle("SCINA")
+
+plot(p)
+```
+
+# 5 Acylsugars
+
+Aacylsugars in cultivated tomato (*Solanum lycopersicum*) trichomes are assembled by four clade III BAHD (BEAT AHCT HCBT1 DAT) acyltransferase enzymes, ACYLSUGAR ACYLTRANSFERASE 1 (SlASAT1; *Solyc12g006330*), SlASAT2 (*Solyc04g012120*), SlASAT3 (*Solyc11g067670*), and SlASAT4 (*Solyc01g105580*), which sequentially esterify acyl chains to a central sucrose core ([*35*](https://www.science.org/doi/10.1126/sciadv.adn3991#core-R35)–[*37*](https://www.science.org/doi/10.1126/sciadv.adn3991#core-R37)). Acylsugar biosynthesis also involves enzymes co-opted from general metabolism, including ISOPROPYLMALATE SYNTHASE 3 (IPMS3; *Solyc08g014230*) ([*38*](https://www.science.org/doi/10.1126/sciadv.adn3991#core-R38)), ACYLSUGAR ACYL-COA SYNTHETASE 1 (AACS1; *Solyc07g043630*) ([*39*](https://www.science.org/doi/10.1126/sciadv.adn3991#core-R39)), and ACYLSUGAR ENOYL-COA HYDRATASE 1 (AECH1; *Solyc07g043680*) ([*39*](https://www.science.org/doi/10.1126/sciadv.adn3991#core-R39)). Notably, *SlASAT1*, *SlAECH1*, and *SlAACS1* are colocalized to a trichome acylsugar BGC spanning syntenic regions of chromosomes 7 and 12 
+
+<https://www.science.org/doi/10.1126/sciadv.adn3991>
+
+```{r}
+# Acyl sugar genes:
+genes1 <- c("Solyc12g006330", "Solyc04g012120", "Solyc11g067670", "Solyc01g105580")
+# General metabolism for acylsugar:
+genes2 <- c("Solyc08g014230", "Solyc07g043630", "Solyc07g043680")
+
+# Close paralogs of trichome acylsugar acyltransferase (ASAT) enzymes
+genes3 <- c("Solyc12g006330", "Solyc11g067347", "Solyc11g067340", "Solyc11g067330", "Solyc11g067290", "Solyc11g067270", "Solyc07g043700", "Solyc07g043710", "Solyc07g026890", "Solyc01g105550-c2.1", "Solyc0g105550.1.1", "Solyc01g105590", "Solyc01g105580")
+found <- c()
+
+for(bait in c(genes3)){
+  found <- c(found, rownames(pbmc)[grep(bait, rownames(pbmc))])
+}
+
+# Plot the data using the SCINA annotations:
+Idents(pbmc) <- "SCINA"
+p <- DotPlot(pbmc, features=found, scale=TRUE) + 
+  RotatedAxis() + 
+  coord_flip() + 
+  ggtitle("SCINA")
+
+plot(p)
+
+```
+
+# 6. Identification of tomato root growth regulatory genes and transcription factors through comparative transcriptomic profiling of different tissues
+
+<https://link.springer.com/article/10.1007/s12298-021-01015-0/figures/6>
+
+```{r}
+ja_pathway <- c("Solyc01g109140", "Solyc10g007960", "Solyc01g103390", 
+                "Solyc07g042170", "Solyc03g118540", "Solyc06g068930", 
+                "Solyc08g036640", "Solyc10g076670")
+
+ethylene_receptors <- c("Solyc08g081540", "Solyc02g091990", 
+                        "Solyc02g077370", "Solyc11g011750", 
+                        "Solyc01g090300", "Solyc09g075420")
+
+auxin_response <- c("Solyc06g084070", "Solyc07g048070", 
+                    "Solyc03g082520", "Solyc03g082530", 
+                    "Solyc06g005090", "Solyc06g007390", 
+                    "Solyc02g085910")
+
+aba_response <- c("Solyc11g065930", "Solyc03g095780", 
+                  "Solyc02g076770", "Solyc06g050500")
+
+ga_response <- c("Solyc01g079200", "Solyc07g061720", 
+                 "Solyc02g083870", "Solyc02g083880")
+```
+
+```{r}
+DotPlotGeneList <- function(genelist, title){
+  found <- NULL
+  for(bait in c(genelist)){
+    found <- c(found, rownames(pbmc)[grep(bait, rownames(pbmc))])
+  }
+  
+  # Plot the data using the SCINA annotations:
+  Idents(pbmc) <- "SCINA"
+  p <- DotPlot(pbmc, features=found, scale=TRUE) + 
+    RotatedAxis() + 
+    coord_flip() + 
+    ggtitle(title)
+  
+  plot(p)
+}
+
+DotPlotGeneList(ja_pathway, "ja_pathway")
+DotPlotGeneList(ethylene_receptors, "ethylene_receptors")
+DotPlotGeneList(auxin_response, "auxin_response")
+DotPlotGeneList(aba_response, "aba_response")
+DotPlotGeneList(ga_response, "aba_response")
+
+```
+
+# 4. Cleanup
+
+```{r}
+gc()
+```

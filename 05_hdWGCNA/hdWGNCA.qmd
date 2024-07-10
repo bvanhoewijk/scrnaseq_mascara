@@ -1,0 +1,369 @@
+---
+title: "tomato_rep12_hdwgcna"
+format: html
+editor: visual
+---
+
+```{r}
+# single-cell analysis package
+library(Seurat)
+
+# plotting and data science packages
+library(tidyverse)
+library(cowplot)
+library(patchwork)
+
+# co-expression network analysis packages:
+library(WGCNA)
+library(hdWGCNA)
+
+# using the cowplot theme for ggplot
+theme_set(theme_cowplot())
+
+# optionally enable multithreading
+enableWGCNAThreads(nThreads = 8)
+
+rm(list=ls())
+gc()
+```
+
+# 1 Load data
+
+```{r}
+pbmc <- readRDS("../02_scRNA_analysis/data/pbmc_with_scina.rds")
+pbmc
+```
+
+```{r}
+colnames(pbmc@meta.data)
+```
+
+```{r}
+table(pbmc@meta.data$scsorter)
+```
+
+Grab cells that are not unknown:
+
+```{r}
+pbmc <- pbmc[,pbmc@meta.data$scsorter != "Unknown"]
+pbmc
+```
+
+# 2 Plot
+
+```{r}
+p <- DimPlot(pbmc, group.by="scsorter")
+p
+```
+
+```{r}
+seurat_obj <- SetupForWGCNA(
+  pbmc,
+  gene_select = "fraction", # the gene selection approach
+  fraction = 0.05, # fraction of cells that a gene needs to be expressed in order to be included
+  wgcna_name = "tutorial" # the name of the hdWGCNA experiment
+)
+```
+
+# 3 Meta cell
+
+```{r}
+# construct metacells  in each group
+seurat_obj <- MetacellsByGroups(
+  seurat_obj = seurat_obj,
+  group.by = c("scsorter"), # specify the columns in seurat_obj@meta.data to group by
+  reduction = 'umap', # select the dimensionality reduction to perform KNN on
+  k = 25, # nearest-neighbors parameter
+  max_shared = 10, # maximum number of shared cells between two metacells
+  ident.group = 'scsorter' # set the Idents of the metacell seurat object
+)
+
+# normalize metacell expression matrix:
+seurat_obj <- NormalizeMetacells(seurat_obj)
+```
+
+## 3.1 Process the metacell Seurat object
+
+Since we store the Metacell expression information as its own Seurat object, we can run Seurat functions on the metacell data. We can get the metacell object from the hdWGCNA experiment using `GetMetacellObject`.
+
+Additionally, we have included a few wrapper functions to apply the Seurat workflow to the metacell object within the hdWGCNA experiment. Here we apply these wrapper functions to process the metacell object and visualize the aggregated expression profiles in two dimensions with UMAP.
+
+```{r}
+seurat_obj <- NormalizeMetacells(seurat_obj)
+seurat_obj <- ScaleMetacells(seurat_obj, features=VariableFeatures(seurat_obj))
+seurat_obj <- RunPCAMetacells(seurat_obj, features=VariableFeatures(seurat_obj))
+seurat_obj <- RunHarmony(seurat_obj, "scsorter")
+seurat_obj <- RunUMAPMetacells(seurat_obj, reduction='pca', dims=1:15)
+
+p1 <- DimPlotMetacells(seurat_obj, group.by='scsorter') + umap_theme()
+p1
+```
+
+```{r}
+(metacell_obj <- GetMetacellObject(seurat_obj))
+rownames(metacell_obj) <- gsub(pattern="\\..*", "", rownames(metacell_obj))
+rownames(metacell_obj) <- gsub(pattern="^gene:", "", rownames(metacell_obj))
+```
+
+```{r}
+counts <- GetAssayData(metacell_obj)
+str(counts)
+```
+
+```{r}
+test_counter <- function(x){
+  sum(x == 0) / length(x)  
+}
+
+good_gene <- apply(counts, 1, test_counter)
+
+hist(good_gene, breaks=seq(0, 1.0, 0.01), main="Missing data genes", xlab="Fraction missing")
+
+```
+
+```{r}
+# Max 0.99 missing
+good <- good_gene < 0.99
+table(good)
+```
+
+```{r}
+metacell_obj <- metacell_obj[good, ]
+```
+
+```{r}
+meta <- data.frame(cell_types=gsub("_\\d+$", "", colnames(metacell_obj)))
+head(meta)
+```
+
+```{r}
+fig2e_genes <- c("Solyc05g051550","Solyc09g083050","Solyc03g005320",
+                 "Solyc01g094750","Solyc02g014730","Solyc01g095750",
+                 "Solyc01g094700","Solyc04g011600","Solyc06g074390",
+                 "Solyc11g067180","Solyc03g097500","Solyc05g054890",
+                 "Solyc09g065420","Solyc03g115960")
+found <- c()
+for(bait in fig2e_genes){
+  found <- c(found, rownames(metacell_obj)[grep(bait, rownames(metacell_obj))])
+  
+}
+
+DotPlot(metacell_obj, features=found, scale=TRUE,) + RotatedAxis() + coord_flip()
+
+
+```
+
+```{r}
+ar <- ASCA_decompose(d = meta, x = t(counts), f = "cell_types")
+resids <- ar$residuals
+```
+
+```{r}
+baits <- fig2e_genes[1:5]
+cormat <- cor(resids[,which(colnames(resids) %in% baits)])
+melted_cormat <- melt(cormat)
+
+ggplot(data=melted_cormat, aes(x=Var1, y=Var2, fill=value)) + 
+  geom_tile() + 
+  xlab("") +
+  ylab("") +
+  geom_text(aes(label=round(value, 2)), color="white") +
+  scale_fill_gradient2(low = "#075AFF",
+                       mid = "#FFFFCC",
+                       high = "#FF0000",
+                       breaks=c(-1, 0, 1)) +
+  theme(axis.text.x = element_text(angle=90, vjust=.5, hjust=1))
+```
+
+```{r}
+library(pls)
+spls_res <- simpls.fit(resids[,-which(colnames(resids) %in% baits)],
+                          resids[,which(colnames(resids) %in% baits)], ncomp = 2)
+```
+
+```{r}
+q_bar <- colMeans(spls_res$Yloadings)
+R <- spls_res$projection
+R_TP <- (dot(t(R),q_bar)/dot(q_bar,q_bar))
+  
+Candidates <- as.data.frame(R_TP[order(R_TP, decreasing = TRUE)])
+```
+
+```{r}
+# Transpose to make the 'gene expression' the same as
+# in the `expr` object
+resids_t <- t(resids)
+```
+
+```{r, fig.width=6, fig.height=4}
+library(scales)
+name1 <- baits[3]
+name2 <- rownames(Candidates)[1]
+
+# Corrected counts (residuals)
+df1 <- data.frame(gene1=resids_t[name1, ], 
+                  gene2=resids_t[name2, ], 
+                  Celltype = meta$cell_types)
+cor1 <- round(cor(df1$gene1, df1$gene2),2)
+
+
+# P1
+p1 <- ggplot(data=df1, aes(gene1, gene2)) + 
+  geom_point(aes(colour=Celltype), alpha = 0.8) + 
+  xlab(paste0("bait: ", name1)) + 
+  ylab(paste0("target: ", name2)) +
+  ggtitle(paste0("Residuals of gene expression\ncorr:", cor1)) 
+  #theme(legend.position = "none")
+
+p1
+```
+
+```{r, fig.width=6, fig.height=6}
+# Create color list of top20:
+cols <- rep(1, nrow(R))
+top20 <- rownames(Candidates)[1:20]
+
+cols[rownames(R) %in% top20] <- 2
+plot(R[, 1], R[,2], pch=19, col=cols)
+```
+
+```{r}
+i <- 0
+for(bait in fig2e_genes){
+  if(bait %in% rownames(Candidates)){
+    index <- grep(bait, rownames(Candidates))
+    cat(paste0("Gene ", bait, " (",i,") found at rank ", index), "\n") 
+  }else{
+    cat(paste0("Gene ", bait, " (",i,") not found"), "\n") 
+  }
+  i <- i+1
+}
+```
+
+# Various pathways
+
+```{r}
+ja_pathway <- c("Solyc01g109140", "Solyc10g007960", "Solyc01g103390", 
+                "Solyc07g042170", "Solyc03g118540", "Solyc06g068930", 
+                "Solyc08g036640", "Solyc10g076670")
+
+ethylene_receptors <- c("Solyc08g081540", "Solyc02g091990", 
+                        "Solyc02g077370", "Solyc11g011750", 
+                        "Solyc01g090300", "Solyc09g075420")
+
+auxin_response <- c("Solyc06g084070", "Solyc07g048070", 
+                    "Solyc03g082520", "Solyc03g082530", 
+                    "Solyc06g005090", "Solyc06g007390", 
+                    "Solyc02g085910")
+
+aba_response <- c("Solyc11g065930", "Solyc03g095780", 
+                  "Solyc02g076770", "Solyc06g050500")
+
+ga_response <- c("Solyc01g079200", "Solyc07g061720", 
+                 "Solyc02g083870", "Solyc02g083880")
+
+DotPlotGeneList <- function(genelist, title){
+  found <- NULL
+  for(bait in c(genelist)){
+    found <- c(found, rownames(metacell_obj)[grep(bait, rownames(metacell_obj))])
+  }
+  
+  p <- DotPlot(metacell_obj, features=found, scale=TRUE) + 
+    RotatedAxis() + 
+    coord_flip() + 
+    ggtitle(title)
+  
+  plot(p)
+}
+
+DotPlotGeneList(ja_pathway, "ja_pathway")
+DotPlotGeneList(ethylene_receptors, "ethylene_receptors")
+DotPlotGeneList(auxin_response, "auxin_response")
+DotPlotGeneList(aba_response, "aba_response")
+DotPlotGeneList(ga_response, "aba_response")
+```
+
+# Jasmonic acid
+
+```{r}
+ja_pathway <- c("Solyc01g109140", "Solyc10g007960", "Solyc01g103390", 
+                "Solyc07g042170", "Solyc03g118540", "Solyc06g068930", 
+                "Solyc08g036640", "Solyc10g076670")
+
+
+baits <- ja_pathway[ja_pathway %in% colnames(resids)]
+baits
+```
+
+```{r}
+cormat <- cor(resids[,which(colnames(resids) %in% baits)])
+melted_cormat <- melt(cormat)
+
+ggplot(data=melted_cormat, aes(x=Var1, y=Var2, fill=value)) + 
+  geom_tile() + 
+  xlab("") +
+  ylab("") +
+  geom_text(aes(label=round(value, 2)), color="white") +
+  scale_fill_gradient2(low = "#075AFF",
+                       mid = "#FFFFCC",
+                       high = "#FF0000",
+                       breaks=c(-1, 0, 1)) +
+  theme(axis.text.x = element_text(angle=90, vjust=.5, hjust=1))
+```
+
+Correlation of baits not signfiicant.
+
+# Auxin response
+
+```{r}
+
+auxin_response <- c("Solyc06g084070", "Solyc07g048070", 
+                    "Solyc03g082520", "Solyc03g082530", 
+                    "Solyc06g005090", "Solyc06g007390", 
+                    "Solyc02g085910")
+
+baits <- auxin_response[auxin_response %in% colnames(resids)]
+baits
+
+```
+
+```{r}
+cormat <- cor(resids[,which(colnames(resids) %in% baits)])
+melted_cormat <- melt(cormat)
+
+ggplot(data=melted_cormat, aes(x=Var1, y=Var2, fill=value)) + 
+  geom_tile() + 
+  xlab("") +
+  ylab("") +
+  geom_text(aes(label=round(value, 2)), color="white") +
+  scale_fill_gradient2(low = "#075AFF",
+                       mid = "#FFFFCC",
+                       high = "#FF0000",
+                       breaks=c(-1, 0, 1)) +
+  theme(axis.text.x = element_text(angle=90, vjust=.5, hjust=1))
+```
+
+# ABA response
+
+```{r}
+aba_response <- c("Solyc11g065930", "Solyc03g095780", 
+                  "Solyc02g076770", "Solyc06g050500")
+baits <- aba_response[aba_response %in% colnames(resids)]
+baits
+```
+
+```{r}
+cormat <- cor(resids[,which(colnames(resids) %in% baits)])
+melted_cormat <- melt(cormat)
+
+ggplot(data=melted_cormat, aes(x=Var1, y=Var2, fill=value)) + 
+  geom_tile() + 
+  xlab("") +
+  ylab("") +
+  geom_text(aes(label=round(value, 2)), color="white") +
+  scale_fill_gradient2(low = "#075AFF",
+                       mid = "#FFFFCC",
+                       high = "#FF0000",
+                       breaks=c(-1, 0, 1)) +
+  theme(axis.text.x = element_text(angle=90, vjust=.5, hjust=1))
+```

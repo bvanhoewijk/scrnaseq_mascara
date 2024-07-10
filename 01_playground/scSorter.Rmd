@@ -1,0 +1,21 @@
+```r
+rm(list=ls())
+
+library(dplyr)
+library(Seurat)
+library(patchwork)
+library(data.table)
+library(scSorter)
+
+library(tidyr)
+anno <-  read.csv('signatures.csv')
+anno <- gather(anno)
+colnames(anno) <- c("Type", "Marker")
+anno['Weight'] <- 1
+
+anno <- anno[anno['Marker'] != "",]
+anno <- anno[!duplicated(anno$Marker),]
+# anno <- anno[anno$Type %in% c("EP", "EXO"),]
+
+expr_obj <- readRDS("pbmc_tutorial.rds")
+```

@@ -1,0 +1,128 @@
+```{r}
+rm(list=ls())
+```
+```{r}
+library(dplyr)
+library(Seurat)
+library(patchwork)
+library(data.table)
+library(scSorter)
+
+library(tidyr)
+anno <-  read.csv('data/signatures.csv')
+
+# Subset signatures:
+anno2 <- NULL
+for(item in colnames(anno)){
+  anno2[item] <- head(anno[item], 50)
+}
+anno <- data.frame(anno2)
+
+anno <- gather(anno)
+colnames(anno) <- c("Type", "Marker")
+anno['Weight'] <- 2
+
+anno <- anno[anno['Marker'] != "",]
+anno <- anno[!duplicated(anno$Marker),]
+```
+
+```{r}
+dirs <- setNames(c("./data/tomato_seurat/rep1/", "./data/tomato_seurat/rep2/"), c("rep1", "rep2"))
+
+# Load the PBMC dataset
+pbmc.data <- Read10X(data.dir = dirs)
+
+# Initialize the Seurat object with the raw (non-normalized data).
+pbmc <- CreateSeuratObject(counts = pbmc.data, project = "tomato", min.cells = 3, min.features = 500)
+
+# The [[ operator can add columns to object metadata. This is a great place to stash QC stats
+pbmc[["percent.mt"]] <- PercentageFeatureSet(pbmc, pattern = "^MT-")
+pbmc[["percent.cp"]] <- PercentageFeatureSet(pbmc, pattern = "^CP-")
+
+pbmc <- subset(pbmc, subset = nFeature_RNA > 500 & percent.mt < 1 & percent.cp < 1)
+
+#pbmc <- NormalizeData(pbmc)
+pbmc <- SCTransform(pbmc)
+
+pbmc <- FindVariableFeatures(pbmc, selection.method = "vst", nfeatures = 2000)
+pbmc <- RunPCA(pbmc, features = VariableFeatures(object = pbmc), npcs=100)
+ElbowPlot(pbmc)
+``` 
+```{r}
+
+all.genes <- rownames(pbmc)
+# Rm weird stuff:
+all.genes <- all.genes[grep("Sol", all.genes)]
+
+pbmc <- ScaleData(pbmc, features = all.genes)
+pbmc <- FindNeighbors(pbmc, dims = 1:15)
+pbmc <- FindClusters(pbmc, resolution = 0.5)
+pbmc <- RunUMAP(pbmc, dims = 1:35)
+DimPlot(pbmc, reduction = "umap", pt.size=1)
+```
+```{r}
+#saveRDS(pbmc, file = "pbmc_tutorial.rds")
+```
+
+```{r}
+expr_obj <- readRDS("pbmc_tutorial.rds")
+```
+
+
+```{r}
+expr_obj <- FindVariableFeatures(expr_obj, selection.method = "vst", nfeatures = 500, verbose = F)
+topgenes <- head(VariableFeatures(expr_obj), 500)
+```
+
+
+```{R}
+expr <- expr_obj[["RNA"]]$scale.data
+rownames(expr) <- gsub("\\..$", "", rownames(expr))
+topgenes <- gsub("\\..$", "", topgenes)
+
+topgene_filter = rowSums(as.matrix(expr)[topgenes, ]!=0) > ncol(expr)*.1
+topgenes = topgenes[topgene_filter]
+```
+
+```{r}
+picked_genes = unique(c(anno$Marker, topgenes, anno$Marker[anno$Marker %in% rownames(expr)]))
+expr = expr[rownames(expr) %in% picked_genes, ]
+anno <- anno[anno$Marker %in% rownames(expr),]
+```
+
+```{r}
+table(anno$Type)
+```
+
+```{R}
+rts <- scSorter(expr, anno)
+```
+
+```{r}
+table(rts$Pred_Type)
+```
+
+# UMAP
+```{r}
+expr_obj <- RunPCA(pbmc, features = VariableFeatures(object = pbmc), npcs=50)
+ElbowPlot(expr_obj, ndims=50)
+```
+```{r}
+expr_obj <- RunUMAP(pbmc, dims = 1:30)
+```
+
+```{r}
+#DimPlot(expr_obj, reduction = "umap")
+expr_obj$CellType <- rts$Pred_Type
+```
+
+```{r}
+Idents(expr_obj) <- "CellType"
+DimPlot(expr_obj, reduction = "umap") + xlim(c(-12,12)) + ylim(c(-12,12))
+```
+
+```{r}
+test <- expr_obj[,expr_obj$CellType == "GeneralCortex" | expr_obj$CellType == "MeristematicCortex"]
+Idents(test) <- "CellType"
+DimPlot(test, reduction = "umap") + xlim(c(-12,12)) + ylim(c(-12,12))
+```

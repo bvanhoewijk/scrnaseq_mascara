@@ -1,0 +1,54 @@
+
+```{R}
+rm(list=ls())
+
+library(dplyr)
+library(Seurat)
+library(patchwork)
+library(data.table)
+library(tidyverse)
+
+lapply(c("dplyr","Seurat","HGNChelper","openxlsx"), library, character.only = T)
+source("https://raw.githubusercontent.com/IanevskiAleksandr/sc-type/master/R/gene_sets_prepare.R"); 
+source("https://raw.githubusercontent.com/IanevskiAleksandr/sc-type/master/R/sctype_score_.R")
+```
+
+```{R}
+expr_obj <- readRDS("pbmc_tutorial.rds")
+#expr <- GetAssayData(expr_obj)
+expr <- expr_obj[["RNA"]]$scale.data
+
+rownames(expr) <- gsub("\\..$", "", rownames(expr))
+
+
+anno <-  read.csv('data/signatures.csv')
+anno <- anno |> gather()
+colnames(anno) <- c("Type", "Marker")
+
+anno <- anno[anno$Marker %in% rownames(expr),]
+```
+
+```{r}
+rownames(anno) <- NULL
+anno <- anno[anno['Marker'] != "",]
+anno <- anno[!duplicated(anno$Marker),]
+
+anno2 <- list()
+for(type in unique(anno$Type)){
+    anno2[[type]] <- head(anno$Marker[anno["Type"] == type], 25)
+    # anno2[[type]] <- anno$Marker[anno["Type"] == type]
+}
+anno <- anno2
+str(anno)
+```
+
+```{r}
+# Drop mitochrondial markers:
+expr_mat <- as.matrix(expr)
+to_keep <- grep("Solyc", rownames(expr_mat))
+expr_mat <- expr_mat[to_keep,]
+
+
+# assign cell types
+es.max <- sctype_score(scRNAseqData = expr_mat, scaled = TRUE, gs = anno, gs2 = NULL)
+```

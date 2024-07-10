@@ -1,0 +1,595 @@
+---
+title: "Haider Data Figures"
+author: "Fred White"
+date: '`r format(Sys.time(), "%d %B, %Y")`'
+output:
+  bookdown::html_document2:
+    toc: true
+    theme: united
+    toc_depth: 3
+---
+
+```{r setup, include=FALSE}
+rm(list=ls())
+library(knitr)
+knitr::opts_chunk$set(echo = TRUE, warning = F, message = F, echo = F)
+```
+
+# 1 Load libraries and code
+
+```{r , echo=FALSE, include=FALSE}
+source("code/DATA_SIM_FUNCS.R")
+```
+
+```{r, echo = FALSE, include=FALSE}
+library(devtools)
+library(ggplot2)
+#library(MetStaT)
+library(gASCA)
+library(patchwork)
+library(readxl)
+library(ggfortify)
+library(ggrepel)
+library(grid)
+library(gridExtra)
+library(tidyr)
+library(tidyverse)
+library(reshape2)
+library(scales)
+library(matrixStats)
+library(DESeq2)
+library(MASS)
+library(glmnet)
+library(doParallel)    
+library(MUVR) 
+library(pheatmap)
+library(caret)
+library(data.table)
+library(plotly)
+library(mixOmics)
+#library(DiscriMiner)
+```
+
+```{r}
+getwd()
+# In bash to download the annotation file:
+# curl https://rapdb.dna.affrc.go.jp/download/archive/irgsp1/IRGSP-1.0_representative_transcript_exon_2024-01-11.gtf.gz -O
+# mv IRGSP-1.0_representative_transcript_exon_2024-01-11.gtf.gz Rice_Annotation/
+# cd Rice_Annotation && gunzip *.gz
+# cd ..
+```
+
+# 1.1 Load data and prepare baits
+
+```{r}
+Date <- Sys.Date()
+
+species <- "Oryza sativa"
+# ncores = 16
+# registerDoParallel(cores = ncores)
+
+baits <- c("Os11g0587000","Os04g0550600","Os01g0746400",
+           "Os01g0700900","Os06g0565100","Os01g0700500",
+           "Os08g0547900")
+
+
+sls <- c("Os01t0700300-00", "Os01t0700900-01", "Os01t0746400-01", 
+         "Os03t0263300-01", "Os03t0408600-01", "Os02t0817900-01", 
+         "Os04t0550600-01", "Os11t0587000-01", "Os12t0405200-01")
+
+URPS <- c("Os08t0299400-01","Os03t0406100-01","Os10t0116800-01",
+          "Os11t0658900-01","Os02t0609000-01","Os11t0151700-01",
+          "Os08t0564000-01","Os08t0280100-01","Os05t0542150-01")
+
+
+ref <- read.table("data/MASCARA/R/Rice_Annotation/IRGSP-1.0_representative_transcript_exon_2024-01-11.gtf", sep = "\t")      
+raw_counts <- read.table("data/MASCARA/R/Data_Haider/raw_counts.tsv", sep = "\t", header = T)
+
+meta <- readRDS("data/MASCARA/R/Data_Haider/RICE_META.rds")
+```
+
+## 1.2 Standardize transcript ids
+
+```{r}
+ref <- ref[which(ref$V3 == "transcript"),]
+ref$ID <- gsub(".*gene_id ","",ref$V9)
+ref$ID <- gsub(";.*","",ref$ID)
+
+ref$transcript <- gsub(".*transcript_id ","",ref$V9)
+ref$transcript <- gsub(";.*","",ref$transcript)
+
+ref$biotype <- gsub(".*transcript_biotype ","",ref$V9)
+ref$biotype <- gsub(";.*","",ref$biotype)
+
+
+baits_transcript <- ref[which(ref$ID %in% baits),c(10:11)]
+```
+
+## 1.3 Define meta data
+
+```{r}
+meta <- meta[match(colnames(raw_counts[,-c(1:6)]),rownames(meta)),]
+
+meta$growth_condition[which(meta$growth_condition == "-P")] <- "P-"
+meta$growth_condition[which(meta$growth_condition == "+P")] <- "P+"
+
+```
+
+# 2 QC
+
+## 2.1 Filter low/no expression genes
+
+```{r}
+#filtering low/no expression genes
+counts <- raw_counts
+colnames(counts)[-c(1:6)] <- meta$ID
+conds <- unique(gsub("_1_.*","_",colnames(counts)[-c(1:6)]))
+
+
+####filter per experimental condition on number of zeroes
+i <- NULL
+cond_zeroes <- data.frame(matrix())
+for(i in 1:length(conds)){
+  zeroes <- rowSums(counts[,grep(conds[i], colnames(counts), fixed = T)] == 0)
+  cond_zeroes <- cbind(cond_zeroes,zeroes)
+}
+
+cond_zeroes <- cond_zeroes[,-1]
+colnames(cond_zeroes) <- conds
+counts2 <- counts[rowSums(cond_zeroes==0) >= 3,]
+cond_zeroes <- cond_zeroes[rowSums(cond_zeroes==0) >= 3,]
+counts3 <- counts2[which(rowMax(data.matrix(counts2[,-c(1:6)])) < 5000),]
+
+```
+
+## 2.2 DESeq variance stabilization
+
+```{r}
+rownames(meta) <- NULL
+dds <- DESeqDataSetFromMatrix(countData = counts3[,-c(1:6)], 
+                              colData = meta, 
+                              design = ~ ID) 
+
+# do not take the design formula into account. (blind = TRUE)
+vsd <- varianceStabilizingTransformation(object = dds, 
+                                         blind = TRUE,           
+                                         # best practice for sample-level QC
+                                         fitType = "parametric")
+
+# extract the matrix of variance stabilised counts
+variance_stabilised_counts <- assay(vsd)
+
+# saveRDS(vsd, "Data_Haider/Rice_Counts4ASCA.RDS")
+# saveRDS(meta, "Data_Haider/Rice_Meta4ASCA.RDS")
+```
+
+## 2.3 More meta data and bait definitions?
+
+```{r real data import}
+# X <- readRDS("Data_Haider/Rice_Counts4ASCA.RDS")
+X <- vsd
+# meta <- readRDS("Data_Haider/Rice_Meta4ASCA.RDS")
+colnames(meta)[3] <- c("time")
+
+
+baits <- paste0(c("Os11t0587000","Os04t0550600","Os01t0746400","Os01t0700900"),"-01") 
+#D27 CCD7 CCD8 CYP711A2
+
+# baits2 <- c("Os01t0700300", "Os01t0701700")  
+baits2 <- c("Os01t0700300-00", "Os02t0817900-01")  # identified methyltransferases
+```
+
+```{r}
+meta$time <- as.character(meta$time)
+
+meta$time[which(meta$time == "8")] <- "1"
+meta$time[which(meta$time == "10")] <- "3"
+meta$time[which(meta$time == "14")] <- "7"
+meta$time[which(meta$time == "15")] <- "8"
+
+
+X <- t(assay(X))
+ref <- cbind.data.frame(Feature = colnames(X), 
+                        feature = colnames(X), 
+                        Baits = colnames(X))
+
+
+
+REF <- fread("data/MASCARA/R/Rice_Annotation/IRGSP-1.0_representative_annotation_2022-09-01.tsv",sep = "\t", header = T)
+
+ref <- ref[which(ref$Feature %in% REF$Transcript_ID),]
+ref <- merge(ref,
+             REF[,c("Transcript_ID","Description")], 
+             by.x = "Feature", 
+             by.y = "Transcript_ID")
+
+
+```
+
+```{r}
+meta <- meta[order(meta$time),]
+meta <- meta[order(meta$growth_condition),]
+```
+
+```{r}
+X <- X[match(meta$ID, rownames(X)),]
+```
+
+```{r heatmap}
+row_ann <- data.frame("Pathway" = rep(c("SL","URP"),each = 9))
+rownames(row_ann) <-  c(sls,URPS) 
+
+ann_colours <- list(g_c = c("P-" = "#F8766D",
+                            "P+" = "lightblue"),
+                    time = c("1" = "#fde725",
+                             "3" = "#35b779",
+                             "7" = "#31688e",
+                             "8" = "#440154"),
+                    Pathway = c("SL" = "purple", 
+                                "URP" = "lightgreen"))
+
+h <- t(X[,c(sls,URPS)])
+
+col_ann <- meta
+rownames(col_ann) <- col_ann$ID
+col_ann <- col_ann[,-c(1)]
+colnames(col_ann)[1] <- "g_c"
+
+heat <- pheatmap::pheatmap(t(scale(t(h))),  #
+                             cluster_rows = F,
+                             cluster_cols = F,
+                             show_rownames = T,
+                             show_colnames = F,
+                             annotation_col = col_ann,
+                           annotation_row = row_ann,
+                           annotation_colors = ann_colours,
+                           treeheight_row = 10,
+                           fontsize = 8,
+                           main = "Scaled Gene Expression",silent = T)
+
+grid::grid.newpage()
+grid::grid.draw(heat$gtable)
+
+```
+
+```{r supplementary heatmap id function table}
+library(writexl)
+
+supplementary <- REF[which(REF$Transcript_ID %in% c(sls,URPS)),]
+supplementary <- as.data.frame(supplementary)
+rownames(supplementary) <- supplementary$Transcript_ID
+supplementary <- supplementary[c(sls,URPS),]
+rownames(supplementary) <- NULL
+write_xlsx(supplementary, "S_Table_1_Heatmap_ID_functions.xlsx")
+
+
+```
+
+```{r}
+X <- X[,which(colnames(X) %in% ref$Feature)]
+ref <- ref[match(colnames(X),ref$Feature),]
+
+SL_ref <- ref[grep("trigolact",ref$Description),]
+
+SL_ref <- SL_ref[-which(SL_ref$Feature %in% c("Os01t0701400-01",
+                                              "Os03t0203200-01",
+                                              "Os01t0763200-01",
+                                              "Os04t0668900-01",
+                                              "Os06t0154200-01",
+                                              "Os11t0104300-01",
+                                              "Os08t0250900-01", 
+                                              "Os03t0408600-01")),]
+
+PSI_ref <-read.table("data/MASCARA/R/Rice_Annotation/PSI_genes.txt", sep = "\t", header = T)
+
+GA_ref <- read_xlsx("data/MASCARA/R/Rice_Annotation/GA pathway genes-IDs.xlsx")
+GA_ref$ID <- gsub("g","t",GA_ref$ID)
+GAs <- ref[which(gsub("-.*","",ref$Feature) %in% GA_ref$ID),1]
+```
+
+```{r}
+ref$Baits[-which(ref$Baits %in% c(sls,URPS))] <- "Other"
+ref$Baits[which(ref$Baits %in% sls)] <- "POI"
+ref$Baits[which(ref$Baits %in% URPS)] <- "URP"
+
+ref$Baits <- factor(ref$Baits, levels = c("Other","POI","URP"))
+```
+
+## 2.4 plot mean/sd relationship
+
+```{r, echo = FALSE}
+#### VST inverse #######
+#mean/sd relationship plots
+##Power transformation of counts/concentration matrix
+m_sd_n <- M_SD(X, meta)
+plot_normal <- m_sd_n[[3]]
+plot_normal
+```
+
+```{r, echo=FALSE, include=FALSE}
+db <- cbind.data.frame(meta,X)
+
+# db[,1:3] <- apply(db[,1:3],2,as.character)
+mc <- reshape2::melt(db)
+colnames(mc)[4:5] <- c("Feature","Expression")
+```
+
+## 2.5 Plot expression distribution
+
+```{r, echo=FALSE}
+dist_nb <- ggplot(mc, aes(x = Expression)) + geom_density(alpha = 0.4)+
+  scale_y_continuous(labels = percent_format()) + 
+  scale_x_continuous(guide = guide_axis(check.overlap = TRUE)) +
+  theme_bw()+
+  ggtitle("NB transformed")
+
+dist_nb
+```
+
+# 3 MASCARA
+
+## 3.1 ASCA decompose
+
+```{r, echo = FALSE, include = F}
+m <- meta
+m[,c("growth_condition","time")] <- lapply(m[,c("growth_condition","time")],factor)
+
+res_ASCAplus_nb <- ASCA_decompose(d = m[,c("growth_condition","time")], 
+                                  x = X,
+                                  f = "growth_condition + time + growth_condition:time")
+```
+
+## 3.2 PCA
+
+```{r, echo = FALSE}
+minT <-  res_ASCAplus_nb$decomposition$growth_condition +
+  res_ASCAplus_nb$decomposition$`growth_condition:time`
+
+PCD <- prcomp(minT)
+  
+newdata <- res_ASCAplus_nb$decomposition$growth_condition + 
+  res_ASCAplus_nb$decomposition$`growth_condition:time` + 
+  res_ASCAplus_nb$residuals
+  
+
+PCDE <- predict(PCD, newdata)
+```
+
+```{r, echo = F, include = FALSE}
+a_c.PCD <- PCD
+SL <- SL_plot(a_c.PCD, meta)
+SL
+```
+
+## 3.3 Loading plot
+
+```{r, echo = F, fig.cap="Top: distribution and mean sd relationship. Bottom: scores and loadings of the main effect; growth condition + interaction"}
+ve1 <- paste0(round(summary(a_c.PCD)$importance[2,1:2] * 100, digits = 2), "%")
+
+loadingplot <- function(df, meta, ve, ref, ...){
+  #df is PCD$rotation
+
+  #rematch REF, ref, df
+  df <- as.data.frame(df)
+  df <- cbind.data.frame(ref,df)
+
+  ggplot(df, ...) +
+    xlab(paste0("PC1 ",ve[1])) +
+    ylab(paste0("PC2 ",ve[2])) +
+    geom_point(data = df, size = 5) +
+    scale_x_continuous(guide = guide_axis(check.overlap = TRUE)) +
+    guides(shape = guide_legend(override.aes = list(size = 0.5))) +
+    ggtitle("Loadings") +
+    theme_bw()
+}
+
+
+
+l <- loadingplot(a_c.PCD$rotation, meta, ve = ve1, 
+                 ref = ref, aes(x = PC1,y = PC2, 
+                                colour = Baits, 
+                                label = Description, 
+                                alpha = Baits)) + theme(legend.title=element_blank())
+
+
+l <- l + 
+  scale_color_manual(values = c("Other" = "black", "POI" = "purple","URP" = "green")) +
+  coord_fixed() + 
+  theme(aspect.ratio = 1,text=element_text(size=18))
+l
+
+```
+
+## 3.4 Score plot
+
+```{r}
+meta2 <- meta
+colnames(meta2)[2] <- "g_c"
+
+scoreplot <- function(df, meta, ve, ...){
+  #df <- as.data.frame(df)
+  df <- cbind.data.frame(meta,df)
+  df$time <- factor(df$time) #, levels = c(1:4)
+  df$g_c <- factor(df$g_c)
+  
+  
+  ggplot(df, ...)+
+    geom_point(size = 5) +
+    xlab(paste0("PC1 ",ve[1])) +
+    ylab(paste0("PC2 ",ve[2])) + 
+    theme_bw() 
+    
+  
+}
+s <- scoreplot(PCDE, meta2, ve1, 
+               aes(x= PC1, y = PC2, colour = g_c, shape = time))
+s <- s + ggtitle("Scores")
+s <- s + coord_fixed() + theme(aspect.ratio = 1, text=element_text(size=18))
+s
+
+```
+
+```{r}
+meta
+```
+
+## 3.5 ASCA candidates
+
+```{r}
+ASCA_cands <- get_ASCA_cands(a_c.PCD)
+colnames(ASCA_cands) <- c("VIP", "PC1","PC2")
+
+CAND_TAB <- round(ASCA_cands[1:10,], 4)
+CAND_TAB <- cbind.data.frame(rownames(CAND_TAB), CAND_TAB)
+colnames(CAND_TAB)[1] <- "Feature"
+
+
+fill <- rep(c("grey95", "grey90"), nrow(CAND_TAB))
+fill[which(CAND_TAB$Feature %in% baits)] <- "yellow"
+
+theme1 <- ttheme_default(core = list(
+  fg_params = list(fontface=c(rep("plain", nrow(CAND_TAB)))),
+  bg_params = list(fill = fill)),
+  base_size = 5, padding = unit(c(2, 2), "mm"))
+
+candtab <- gridExtra::tableGrob(CAND_TAB, rows = NULL, theme = theme1)
+
+(dist_norm + plot_normal)/(s + l)
+candtab
+```
+
+```{r}
+(s + l)
+```
+
+```{r}
+get_ASCA_cands2 <- function(PCD, meta, distance_calc= FALSE, baits = NULL, spikes = NULL, ret_candN = nrow(PCD$rotation)){
+  #############
+  
+  if(distance_calc== TRUE){
+    cands <- ranked_dist(baits,PCD)
+  }else{
+    absload <- abs(data.matrix(PCD$rotation[,1:2])) %*% diag(summary(PCD)$importance[2,1:2])
+    combscore <- rowSums(absload[,1:2])
+    
+    orderedload <- cbind(combscore, PCD$rotation[,1:2])
+    cands <- as.data.frame(orderedload[order(orderedload[,1], decreasing = T),])
+    colnames(cands) <- c("VIP", "PC1","PC2")
+    
+    cands <- round(cands[1:ret_candN,], 4)
+  }
+  return(cands)
+}
+
+pathway <- ref[which(ref$Baits == "POI"),1]
+
+
+ASCA_cands2 <- get_ASCA_cands2(a_c.PCD)
+ASCA_cands2 <- ASCA_cands2[which(ASCA_cands2[,2] < 0),]
+ASCA_cands2 <- ASCA_cands2[order(ASCA_cands2[,2]),]
+ASCA_cands2 <- ASCA_cands2[-which(rownames(ASCA_cands2) %in% pathway),]
+
+ASCA_cands3 <- ASCA_cands2[-which(rownames(ASCA_cands2) %in% c("Os06t0570600-00",
+                                                               "Os06t0570566-00",
+                                                               "Os09t0321200-00",
+                                                               "Os06t0651900-01", 
+                                                               "Os10t0444566-00")),]
+
+
+
+qqplot <- function(data, meta, ...){
+  df <- cbind.data.frame(meta,data)
+
+  df$time <- factor(df$time, levels = unique(meta$time))
+  df$growth_condition <- factor(df$growth_condition)
+
+  ggplot(df, ...) +
+    geom_point() +
+    theme_bw()
+}
+
+meta$time <- rep(c(1,3,7,8), each = 3, 2)
+
+PSI_ref <-read.table("Rice_Annotation/PSI_genes.txt", sep = "\t", header = T)
+psi_ref <- PSI_ref[which(PSI_ref[,1] %in% colnames(res_ASCAplus_nb$residuals)),]
+
+PSI_cands <- rownames(ASCA_cands[which(rownames(ASCA_cands) %in% psi_ref[,1]),])
+PSI_cands <- head(rownames(ASCA_cands[-which(rownames(ASCA_cands) %in% pathway),]),20)
+
+
+######################## BvH: what is this? correlations between residuals?
+cand_b <- PSI_cands[10]
+cand_w <- baits[3]
+
+cor_tw <- round(cor(X[,which(colnames(X) %in% cand_w)], X[,which(colnames(X) %in% baits[4])]), digits = 2)
+cor_tb <- round(cor(X[,which(colnames(X) %in% cand_b)], X[,which(colnames(X) %in% baits[4])]), digits = 2)
+
+cor_rw <- round(cor(res_ASCAplus_nb$residuals[,which(colnames(res_ASCAplus_nb$residuals) %in% cand_w)],
+                    res_ASCAplus_nb$residuals[,which(colnames(res_ASCAplus_nb$residuals) %in% baits[4])]), 
+                digits = 2)
+
+cor_rb <- round(cor(res_ASCAplus_nb$residuals[,which(colnames(res_ASCAplus_nb$residuals) %in% cand_b)],
+                    res_ASCAplus_nb$residuals[,which(colnames(res_ASCAplus_nb$residuals) %in% baits[4])]),
+                digits = 2)
+
+
+within <- qqplot(cbind.data.frame("Candidate" = X[,which(colnames(X) %in% cand_w)],
+                                  "Bait" = X[,which(colnames(X) %in% baits[4])]),
+                 meta, 
+                 aes(x = Bait, y = Candidate, colour = growth_condition, shape = time)) + 
+                 xlab(baits[4]) + 
+                 ylab(cand_w) + 
+                 labs(title = paste0("r = ",cor_tw)) + 
+                 theme(aspect.ratio = 1)
+
+PSI_cands <- rownames(ASCA_cands[which(rownames(ASCA_cands) %in% psi_ref[,1]),])
+PSI_cands <- head(rownames(ASCA_cands[-which(rownames(ASCA_cands) %in% pathway),]),20)
+
+
+between <- qqplot(cbind.data.frame("Candidate" = X[,which(colnames(X) %in% cand_b)], 
+                                   "Bait" = X[,which(colnames(X) %in% baits[4])]),
+                  meta,
+                  aes(x = Bait, y = Candidate, colour = growth_condition, shape = time)) + 
+                  xlab(baits[4]) + 
+                  ylab(cand_b) + 
+                  labs(title = paste0("r = ",cor_tb)) + 
+                  theme(aspect.ratio = 1)
+
+# within + between + plot_layout(guides = "collect",tag_level = 'new') + plot_annotation(tag_levels = c('A')) + plot_layout(heights = unit(c(5), c("cm")), widths = c(5))
+
+
+
+
+within_r <- qqplot(cbind.data.frame("Candidate" = res_ASCAplus_nb$residuals[,which(colnames(res_ASCAplus_nb$residuals) %in% cand_w)],
+                        "Bait" = res_ASCAplus_nb$residuals[,which(colnames(res_ASCAplus_nb$residuals) %in% baits[4])]),
+                   meta,
+                   aes(x = Bait, y = Candidate, colour = growth_condition, shape = time)) + 
+                   xlab(baits[4]) + ylab(cand_w) + 
+                   labs(title = paste0("r = ",cor_rw)) + 
+                   theme(aspect.ratio = 1)#, alpha = (16- as.numeric(growth_condition))
+
+
+between_r <- qqplot(cbind.data.frame("Candidate" = res_ASCAplus_nb$residuals[,which(colnames(res_ASCAplus_nb$residuals) %in% cand_b)],
+                        "Bait" = res_ASCAplus_nb$residuals[,which(colnames(res_ASCAplus_nb$residuals) %in% baits[4])]),
+                    meta,
+                    aes(x = Bait, y = Candidate, colour = growth_condition, shape = time)) + 
+                    xlab(baits[4]) + 
+                    ylab(cand_b) + 
+                    labs(title = paste0("r = ",cor_rb)) + 
+                    theme(aspect.ratio = 1)
+
+# Plot the thing:
+(within + between)/(within_r + between_r) +
+  plot_layout(guides = "collect",tag_level = 'new') +
+  plot_annotation(tag_levels = c('a','1')) 
+
+
+# tiff("Fig2.tif", res = 150, height = 960, width = 960)
+#(within + between)/(within_r + between_r) + plot_layout(guides = "collect",tag_level = 'new') + plot_annotation(tag_levels = c('A','1')) #+ plot_layout(heights = unit(c(5), c("cm")), widths = c(5))
+# dev.off()
+
+
+```
+
+```         
+```
