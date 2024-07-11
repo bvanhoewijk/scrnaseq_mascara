@@ -5,6 +5,9 @@ editor: visual
 ---
 
 ```{r}
+rm(list=ls())
+gc()
+
 # single-cell analysis package
 library(Seurat)
 
@@ -23,8 +26,7 @@ theme_set(theme_cowplot())
 # optionally enable multithreading
 enableWGCNAThreads(nThreads = 8)
 
-rm(list=ls())
-gc()
+
 ```
 
 # 1 Load data
@@ -45,14 +47,14 @@ table(pbmc@meta.data$scsorter)
 Grab cells that are not unknown:
 
 ```{r}
-pbmc <- pbmc[,pbmc@meta.data$scsorter != "Unknown"]
+pbmc <- pbmc[,pbmc@meta.data$SCINA != "unknown"]
 pbmc
 ```
 
 # 2 Plot
 
 ```{r}
-p <- DimPlot(pbmc, group.by="scsorter")
+p <- DimPlot(pbmc, group.by="SCINA")
 p
 ```
 
@@ -60,7 +62,7 @@ p
 seurat_obj <- SetupForWGCNA(
   pbmc,
   gene_select = "fraction", # the gene selection approach
-  fraction = 0.05, # fraction of cells that a gene needs to be expressed in order to be included
+  fraction = 0.01, # fraction of cells that a gene needs to be expressed in order to be included
   wgcna_name = "tutorial" # the name of the hdWGCNA experiment
 )
 ```
@@ -71,11 +73,11 @@ seurat_obj <- SetupForWGCNA(
 # construct metacells  in each group
 seurat_obj <- MetacellsByGroups(
   seurat_obj = seurat_obj,
-  group.by = c("scsorter"), # specify the columns in seurat_obj@meta.data to group by
-  reduction = 'umap', # select the dimensionality reduction to perform KNN on
-  k = 25, # nearest-neighbors parameter
+  group.by = c("SCINA"), # specify the columns in seurat_obj@meta.data to group by
+  reduction = 'pca', # select the dimensionality reduction to perform KNN on
+  k = 50, # nearest-neighbors parameter
   max_shared = 10, # maximum number of shared cells between two metacells
-  ident.group = 'scsorter' # set the Idents of the metacell seurat object
+  ident.group = 'SCINA' # set the Idents of the metacell seurat object
 )
 
 # normalize metacell expression matrix:
@@ -89,20 +91,23 @@ Since we store the Metacell expression information as its own Seurat object, we 
 Additionally, we have included a few wrapper functions to apply the Seurat workflow to the metacell object within the hdWGCNA experiment. Here we apply these wrapper functions to process the metacell object and visualize the aggregated expression profiles in two dimensions with UMAP.
 
 ```{r}
-seurat_obj <- NormalizeMetacells(seurat_obj)
 seurat_obj <- ScaleMetacells(seurat_obj, features=VariableFeatures(seurat_obj))
 seurat_obj <- RunPCAMetacells(seurat_obj, features=VariableFeatures(seurat_obj))
-seurat_obj <- RunHarmony(seurat_obj, "scsorter")
+seurat_obj <- RunHarmony(seurat_obj, "SCINA")
 seurat_obj <- RunUMAPMetacells(seurat_obj, reduction='pca', dims=1:15)
 
-p1 <- DimPlotMetacells(seurat_obj, group.by='scsorter') + umap_theme()
+p1 <- DimPlotMetacells(seurat_obj, group.by='SCINA') + umap_theme()
 p1
 ```
 
 ```{r}
-(metacell_obj <- GetMetacellObject(seurat_obj))
+str(metacell_obj <- GetMetacellObject(seurat_obj))
 rownames(metacell_obj) <- gsub(pattern="\\..*", "", rownames(metacell_obj))
 rownames(metacell_obj) <- gsub(pattern="^gene:", "", rownames(metacell_obj))
+```
+
+```{r}
+library(tidyverse)
 ```
 
 ```{r}
@@ -122,8 +127,8 @@ hist(good_gene, breaks=seq(0, 1.0, 0.01), main="Missing data genes", xlab="Fract
 ```
 
 ```{r}
-# Max 0.99 missing
-good <- good_gene < 0.99
+# Max 0.95 missing
+good <- good_gene < 0.95
 table(good)
 ```
 
@@ -238,6 +243,19 @@ for(bait in fig2e_genes){
   }
   i <- i+1
 }
+```
+
+# More depth
+
+```{r}
+cells_merged <- lapply(metacell_obj$cells_merged, function(x) str_split(unname(x), ",")[[1]]) |> stack()
+
+table(gsub("_\\d+$", "", cells_merged$ind))
+cat("SUM:", sum(table(gsub("_\\d+$", "", cells_merged$ind))), "\n")
+```
+
+```{r}
+dim(GetAssayData(metacell_obj))[2]*25
 ```
 
 # Various pathways

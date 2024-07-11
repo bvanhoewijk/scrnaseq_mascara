@@ -57,6 +57,10 @@ pbmc <- readRDS("../02_scRNA_analysis/data/pbmc_with_scina.rds")
 colnames(pbmc@meta.data)
 ```
 
+```{r}
+table(pbmc@meta.data$SCINA)
+```
+
 # 2. Summary statistics
 
 ## 2.1 Dotplots
@@ -277,8 +281,17 @@ From here we take the residuals and calculate a PLS2 model with a predefined set
 
 ```{r}
 library(pls)
-spls_res <- simpls.fit(resids[,-which(colnames(resids) %in% baits[1:4])],
-                          resids[,which(colnames(resids) %in% baits[1:4])], ncomp = 2)
+X <- resids[,-which(colnames(resids) %in% baits[1:4])]
+y <- resids[,which(colnames(resids) %in% baits[1:4])]
+spls_res <- simpls.fit(X, y, ncomp = 5)
+```
+
+```{r}
+spls_res <- simpls.fit(X, y, ncomp = 5)
+```
+
+```{r}
+spls_res$Xvar
 ```
 
 ```{r}
@@ -341,11 +354,46 @@ df2[df2$gene1 > 0 & df2$gene2 > 0,]
 
 ```{r, fig.width=5, fig.height=5}
 # Create color list of top20:
-cols <- rep(1, nrow(R))
-top20 <- rownames(Candidates)[1:20]
+cols <- rep("gene", nrow(R))
+top10 <- head(rownames(Candidates), 10)
+bot10 <- tail(rownames(Candidates), 10)
 
-cols[rownames(R) %in% top20] <- 2
-plot(R[, 1], R[,2], pch=19, col=cols)
+cols[rownames(R) %in% top10] <- "Top 10"
+cols[rownames(R) %in% bot10] <- "Bottom 10"
+cols[rownames(R) %in% baits] <- "bait"
+plot(R[, 1], R[,2], pch=19, col=as.factor(cols))
+```
+
+```{r}
+R_new <- as.data.frame(R)
+R_new$group <- cols
+R_new <- R_new |> rownames_to_column() |> pivot_longer(cols="Comp 1":"Comp 5", names_to = "component")
+R_new
+```
+
+```{r}
+ggplot(R_new, aes(group=rowname)) + 
+  ylab("Residual") +
+  # Plot the rest of the dataset with 10% opacity:
+  geom_point(data=R_new[R_new$group=="gene",], 
+             mapping=aes(x=component, y=value),col="darkgrey", alpha=0.1) +
+  geom_line(data=R_new[R_new$group=="gene",], 
+            mapping=aes(x=component, y=value),col="darkgrey", alpha=0.1) +
+  # Plot baits
+  geom_point(data=R_new[R_new$group=="bait",], 
+             mapping=aes(x=component, y=value, color=group)) +
+  geom_line(data=R_new[R_new$group=="bait",], 
+             mapping=aes(x=component, y=value, color=group)) +
+  # Plot candidates:
+  geom_point(data=R_new[R_new$group=="Top 10",], 
+             mapping=aes(x=component, y=value, color=group)) + 
+  geom_line(data=R_new[R_new$group=="Top 10",], 
+             mapping=aes(x=component, y=value, color=group)) +
+  # Plot candidates:
+  geom_point(data=R_new[R_new$group=="Bottom 10",], 
+             mapping=aes(x=component, y=value, color=group)) + 
+  geom_line(data=R_new[R_new$group=="Bottom 10",], 
+             mapping=aes(x=component, y=value, color=group))
 ```
 
 Show index number of rest of baits in Candidates list:
@@ -372,16 +420,16 @@ rownames(Candidates)[1]
 ```{r}
 found <- c()
 # make a list with the top 10 candidates
-for(bait in head(rownames(Candidates),2)){
+for(bait in head(rownames(Candidates),10)){
   found <- c(found, rownames(pbmc)[grep(bait, rownames(pbmc))])
   
 }
 # # Add the baits from the figure
-for(bait in fig2e_genes){
-  found <- c(found, rownames(pbmc)[grep(bait, rownames(pbmc))])
-}
-# Unique the list:
-found <- unique(found)
+# for(bait in fig2e_genes){
+#   found <- c(found, rownames(pbmc)[grep(bait, rownames(pbmc))])
+# }
+# # Unique the list:
+# found <- unique(found)
 
 # Plot the data using the SCINA annotations:
 Idents(pbmc) <- "SCINA"
@@ -466,7 +514,20 @@ Solyc08g016720.1.1
 | max2 (signalling) | Solyc07g055120.4.1 |
 
 ```{r}
-?DotPlot
+found <- c()
+baits_fred <- c("Solyc09g065750","Solyc01g090660","Solyc08g066650","Solyc08g062950")
+for(bait in baits_fred){
+  found <- c(found, rownames(pbmc)[grep(bait, rownames(pbmc))])
+}
+
+# Plot the data using the SCINA annotations:
+Idents(pbmc) <- "SCINA"
+p <- DotPlot(pbmc, features=found, scale=TRUE) + 
+  RotatedAxis() + 
+  coord_flip() + 
+  ggtitle("SCINA")
+
+plot(p)
 ```
 
 ```{r}
