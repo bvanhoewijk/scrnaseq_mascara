@@ -19,14 +19,50 @@ library(patchwork)
 # co-expression network analysis packages:
 library(WGCNA)
 library(hdWGCNA)
-
+library(gASCA)
 # using the cowplot theme for ggplot
 theme_set(theme_cowplot())
 
+library(devtools)
+library(ggplot2)
+#library(MetStaT)
+library(gASCA)
+library(patchwork)
+library(readxl)
+library(ggfortify)
+library(ggrepel)
+library(grid)
+library(gridExtra)
+library(tidyr)
+library(tidyverse)
+library(reshape2)
+library(scales)
+library(matrixStats)
+library(DESeq2)
+library(MASS)
+library(glmnet)
+library(doParallel)    
+library(MUVR) 
+library(pheatmap)
+library(caret)
+library(data.table)
+library(plotly)
+library(mixOmics)
+#library(DiscriMiner)
+library(pracma)
+library(matlib)
+library(truncnorm)
+library(pls)
+library(Seurat)
+
 # optionally enable multithreading
 enableWGCNAThreads(nThreads = 8)
+```
 
-
+```{r}
+getwd()
+source("../03_MASCARA/code/DATA_SIM_FUNCS.R")
+source("../03_MASCARA/code//MASCARA_FUNCS.R")
 ```
 
 # 1 Load data
@@ -67,7 +103,7 @@ seurat_obj <- SetupForWGCNA(
 )
 ```
 
-# 3 Meta cell
+# 3 MASCARA on meta cell
 
 ```{r}
 # construct metacells  in each group
@@ -75,9 +111,10 @@ seurat_obj <- MetacellsByGroups(
   seurat_obj = seurat_obj,
   group.by = c("SCINA"), # specify the columns in seurat_obj@meta.data to group by
   reduction = 'pca', # select the dimensionality reduction to perform KNN on
-  k = 50, # nearest-neighbors parameter
-  max_shared = 10, # maximum number of shared cells between two metacells
-  ident.group = 'SCINA' # set the Idents of the metacell seurat object
+  k = 25, # nearest-neighbors parameter
+  max_shared = 15, # maximum number of shared cells between two metacells
+  ident.group = 'SCINA', # set the Idents of the metacell seurat object
+  min_cells=100, # default
 )
 
 # normalize metacell expression matrix:
@@ -101,7 +138,7 @@ p1
 ```
 
 ```{r}
-str(metacell_obj <- GetMetacellObject(seurat_obj))
+metacell_obj <- GetMetacellObject(seurat_obj)
 rownames(metacell_obj) <- gsub(pattern="\\..*", "", rownames(metacell_obj))
 rownames(metacell_obj) <- gsub(pattern="^gene:", "", rownames(metacell_obj))
 ```
@@ -127,8 +164,8 @@ hist(good_gene, breaks=seq(0, 1.0, 0.01), main="Missing data genes", xlab="Fract
 ```
 
 ```{r}
-# Max 0.95 missing
-good <- good_gene < 0.95
+# Max 0.98 missing
+good <- good_gene < 0.98
 table(good)
 ```
 
@@ -158,32 +195,47 @@ DotPlot(metacell_obj, features=found, scale=TRUE,) + RotatedAxis() + coord_flip(
 
 ```
 
+## 3.2 ASCA
+
 ```{r}
 ar <- ASCA_decompose(d = meta, x = t(counts), f = "cell_types")
 resids <- ar$residuals
 ```
 
 ```{r}
-baits <- fig2e_genes[1:5]
+baits <- fig2e_genes[1:4]
+# Correl. to melted df:
 cormat <- cor(resids[,which(colnames(resids) %in% baits)])
-melted_cormat <- melt(cormat)
 
-ggplot(data=melted_cormat, aes(x=Var1, y=Var2, fill=value)) + 
+melted_cormat <- as.data.frame(cormat) |> 
+                 rownames_to_column() |> 
+                 pivot_longer(2:(ncol(cormat)+1))
+
+colnames(melted_cormat) <- c("gene1", "gene2", "value")
+
+melted_cormat
+
+################ GGPLOT the thing:
+
+ggplot(data=melted_cormat, aes(x=gene1, y=gene2, fill=value)) + 
   geom_tile() + 
   xlab("") +
   ylab("") +
-  geom_text(aes(label=round(value, 2)), color="white") +
+  geom_text(aes(label=round(value, 1)), color="white") +
   scale_fill_gradient2(low = "#075AFF",
                        mid = "#FFFFCC",
                        high = "#FF0000",
-                       breaks=c(-1, 0, 1)) +
+                       breaks=c(-1, 0, 1),
+                       limits=c(-1,1)) +
   theme(axis.text.x = element_text(angle=90, vjust=.5, hjust=1))
 ```
+
+## 3.3 PLS
 
 ```{r}
 library(pls)
 spls_res <- simpls.fit(resids[,-which(colnames(resids) %in% baits)],
-                          resids[,which(colnames(resids) %in% baits)], ncomp = 2)
+                          resids[,which(colnames(resids) %in% baits)], ncomp = 5)
 ```
 
 ```{r}
@@ -200,7 +252,9 @@ Candidates <- as.data.frame(R_TP[order(R_TP, decreasing = TRUE)])
 resids_t <- t(resids)
 ```
 
-```{r, fig.width=6, fig.height=4}
+## 3.4 Plot results
+
+```{r, fig.width=10, fig.height=4}
 library(scales)
 name1 <- baits[3]
 name2 <- rownames(Candidates)[1]
@@ -216,11 +270,26 @@ cor1 <- round(cor(df1$gene1, df1$gene2),2)
 p1 <- ggplot(data=df1, aes(gene1, gene2)) + 
   geom_point(aes(colour=Celltype), alpha = 0.8) + 
   xlab(paste0("bait: ", name1)) + 
-  ylab(paste0("target: ", name2)) +
+  ylab("") +
   ggtitle(paste0("Residuals of gene expression\ncorr:", cor1)) 
-  #theme(legend.position = "none")
+  
 
 p1
+
+# P2
+df2 <- data.frame(gene1=counts[name1, ], 
+                  gene2=counts[name2, ], 
+                  Celltype = meta$cell_types)
+cor2 <- round(cor(df2$gene1, df2$gene2),2)
+
+p2 <- ggplot(data=df2, aes(gene1, gene2)) + 
+  geom_point(aes(colour=Celltype), alpha = 0.8) + 
+  xlab(paste0("bait: ", name1)) + 
+  ylab(paste0("target: ", name2)) +
+  ggtitle(paste0("Gene expression\ncorr:", cor2)) +
+  theme(legend.position = "none")
+
+p2|p1
 ```
 
 ```{r, fig.width=6, fig.height=6}
@@ -230,6 +299,9 @@ top20 <- rownames(Candidates)[1:20]
 
 cols[rownames(R) %in% top20] <- 2
 plot(R[, 1], R[,2], pch=19, col=cols)
+
+to_plot =  data.frame(x=R[, 1], y=R[,2], group=as.factor(cols))
+ggplot(data=to_plot, aes(x=x, y=y, color=group)) + geom_point()
 ```
 
 ```{r}
@@ -245,7 +317,58 @@ for(bait in fig2e_genes){
 }
 ```
 
-# More depth
+```{r}
+# Create color list of top20:
+cols <- rep("gene", nrow(R))
+top10 <- head(rownames(Candidates), 10)
+bot10 <- tail(rownames(Candidates), 10)
+
+cols[rownames(R) %in% top10] <- "Top 10"
+cols[rownames(R) %in% bot10] <- "Bottom 10"
+cols[rownames(R) %in% fig2e_genes] <- "bait"
+to_plot =  data.frame(x=R[, 1], y=R[,2], group=as.factor(cols))
+
+
+ggplot(data=to_plot, aes(x=x, y=y, color=group)) + geom_point()
+
+table(cols)
+```
+
+```{r}
+R_new <- as.data.frame(R)
+R_new$group <- cols
+
+# Same function as depreciated `tidyverse::melt()`:
+R_new <- R_new |> rownames_to_column() |> 
+  pivot_longer(cols="Comp 1":"Comp 5", names_to = "component")
+
+ggplot(R_new, aes(group=rowname)) + 
+  ylab("Residual") +
+  # Plot the rest of the dataset with 10% opacity:
+  geom_point(data=R_new[R_new$group=="gene",], 
+             mapping=aes(x=component, y=value),col="darkgrey", alpha=0.1) +
+  geom_line(data=R_new[R_new$group=="gene",], 
+            mapping=aes(x=component, y=value),col="darkgrey", alpha=0.1) +
+  # Plot baits
+  geom_point(data=R_new[R_new$group=="bait",], 
+             mapping=aes(x=component, y=value, color=group)) +
+  geom_line(data=R_new[R_new$group=="bait",], 
+             mapping=aes(x=component, y=value, color=group)) +
+  # Plot Top candidates:
+  geom_point(data=R_new[R_new$group=="Top 10",], 
+             mapping=aes(x=component, y=value, color=group)) + 
+  geom_line(data=R_new[R_new$group=="Top 10",], 
+             mapping=aes(x=component, y=value, color=group)) +
+  # Plot Bottom candidates:
+  geom_point(data=R_new[R_new$group=="Bottom 10",], 
+             mapping=aes(x=component, y=value, color=group)) + 
+  geom_line(data=R_new[R_new$group=="Bottom 10",], 
+             mapping=aes(x=component, y=value, color=group))
+```
+
+# 4 MASCARA on un-merged celltypes
+
+## 4.1 Un-merge the metacells
 
 ```{r}
 cells_merged <- lapply(metacell_obj$cells_merged, function(x) str_split(unname(x), ",")[[1]]) |> stack()
@@ -255,10 +378,83 @@ cat("SUM:", sum(table(gsub("_\\d+$", "", cells_merged$ind))), "\n")
 ```
 
 ```{r}
-dim(GetAssayData(metacell_obj))[2]*25
+cells_merged
 ```
 
-# Various pathways
+```{r}
+pbmc_unmerged <- pbmc[,cells_merged$values]
+pbmc_unmerged
+```
+
+```{r}
+a <- merge(colnames(pbmc_unmerged), cells_merged, all.x = TRUE, by.x="x", by.y="values")
+```
+
+```{r}
+pbmc_unmerged$unmerged_celltype <- as.character(a$ind)
+head(pbmc_unmerged$unmerged_celltype)
+```
+
+```{r}
+counts <- GetAssayData(pbmc_unmerged)
+dim(counts)
+meta <- data.frame(unmerged_celltype=gsub("_\\d+$", "", pbmc_unmerged$unmerged_celltype))
+as.data.frame(table(meta$unmerged_celltype))
+```
+
+```{r}
+rownames(counts) <- gsub(pattern="\\..*", "", rownames(counts))
+rownames(counts) <- gsub(pattern="^gene:", "", rownames(counts))
+```
+
+## 4.2 ASCA
+
+```{r}
+ar <- ASCA_decompose(d = meta, x = t(counts), f = "unmerged_celltype")
+resids <- ar$residuals
+cor(resids[,which(colnames(resids) %in% baits)])
+```
+
+## 4.3 PLS
+
+```{r}
+library(pls)
+X <- resids[,-which(colnames(resids) %in% baits[1:4])]
+y <- resids[,which(colnames(resids) %in% baits[1:4])]
+spls_res <- simpls.fit(X, y, ncomp = 5)
+```
+
+```{r}
+spls_res <- simpls.fit(X, y, ncomp = 5)
+```
+
+```{r}
+q_bar <- colMeans(spls_res$Yloadings)
+R <- spls_res$projection
+R_TP <- (dot(t(R),q_bar)/dot(q_bar,q_bar))
+  
+Candidates <- as.data.frame(R_TP[order(R_TP, decreasing = TRUE)])
+```
+
+## 4.4 Plot results
+
+```{r}
+# Create color list of top20:
+cols <- rep("gene", nrow(R))
+top10 <- head(rownames(Candidates), 10)
+bot10 <- tail(rownames(Candidates), 10)
+
+cols[rownames(R) %in% top10] <- "Top 10"
+cols[rownames(R) %in% bot10] <- "Bottom 10"
+cols[rownames(R) %in% fig2e_genes] <- "bait"
+to_plot =  data.frame(x=R[, 1], y=R[,2], group=as.factor(cols))
+
+
+ggplot(data=to_plot, aes(x=x, y=y, color=group)) + geom_point()
+
+```
+
+# 5 Dotplots of gene expression of various pathways
 
 ```{r}
 ja_pathway <- c("Solyc01g109140", "Solyc10g007960", "Solyc01g103390", 
@@ -301,7 +497,7 @@ DotPlotGeneList(aba_response, "aba_response")
 DotPlotGeneList(ga_response, "aba_response")
 ```
 
-# Jasmonic acid
+## 5.1 Jasmonic acid
 
 ```{r}
 ja_pathway <- c("Solyc01g109140", "Solyc10g007960", "Solyc01g103390", 
@@ -325,13 +521,14 @@ ggplot(data=melted_cormat, aes(x=Var1, y=Var2, fill=value)) +
   scale_fill_gradient2(low = "#075AFF",
                        mid = "#FFFFCC",
                        high = "#FF0000",
-                       breaks=c(-1, 0, 1)) +
+                       breaks=c(-1, 0, 1),
+                       limits=c(-1,1)) +
   theme(axis.text.x = element_text(angle=90, vjust=.5, hjust=1))
 ```
 
-Correlation of baits not signfiicant.
+Correlation of baits not signfiican
 
-# Auxin response
+## 5.2 Auxin response
 
 ```{r}
 
@@ -357,11 +554,12 @@ ggplot(data=melted_cormat, aes(x=Var1, y=Var2, fill=value)) +
   scale_fill_gradient2(low = "#075AFF",
                        mid = "#FFFFCC",
                        high = "#FF0000",
-                       breaks=c(-1, 0, 1)) +
+                       breaks=c(-1, 0, 1),
+                       limits=c(-1,1)) +
   theme(axis.text.x = element_text(angle=90, vjust=.5, hjust=1))
 ```
 
-# ABA response
+## 5.3 ABA response
 
 ```{r}
 aba_response <- c("Solyc11g065930", "Solyc03g095780", 
@@ -384,4 +582,11 @@ ggplot(data=melted_cormat, aes(x=Var1, y=Var2, fill=value)) +
                        high = "#FF0000",
                        breaks=c(-1, 0, 1)) +
   theme(axis.text.x = element_text(angle=90, vjust=.5, hjust=1))
+```
+
+# 6 Cleanup
+
+```{r}
+search()
+gc()
 ```

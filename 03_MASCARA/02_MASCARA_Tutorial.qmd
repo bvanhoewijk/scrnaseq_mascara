@@ -113,12 +113,14 @@ In this case they are, in the case of real data we expect these values to be som
 
 Another sanity check at this stage is to look at the baits residual variance against eachother:
 
-```{r}
+```{r, fig.width=4, fig.height=4}
 
 correl <- cor(resids[,baits[1]], resids[,baits[2]])
-plot(resids[,baits[1]], resids[,baits[2]], main=paste0("Cor: ", round(correl, 2)))
+plot(resids[,baits[1]], resids[,baits[2]], main=paste0("Cor: ", round(correl, 2)), pch=19)
 
 ```
+
+
 
 We can see above that there is a relationship between the examples.
 
@@ -178,3 +180,56 @@ p1 <- ggplot(data=df1, aes(gene1, gene2)) +
   ggtitle(paste0("Corrected counts (residuals)\ncorr:", cor1)) + theme(legend.position = "none")
 p1
 ```
+```{r}
+R_new <- as.data.frame(R)
+R_new
+
+```
+
+```{r}
+baits <- paste0("X_",c(1985:1988))  
+spikes <- paste0("X_",c(1989:2000))
+
+R_new$group <- "gene"
+R_new$group[rownames(R_new) %in% baits] <- "baits"
+R_new$group[rownames(R_new) %in% spikes] <- "spikes"
+```
+
+```{r}
+# Same function as depreciated `tidyverse::melt()`:
+R_new <- R_new |> rownames_to_column() |> 
+  pivot_longer(cols="Comp 1":"Comp 2", names_to = "component")
+
+ggplot(R_new, aes(group=rowname)) + 
+  ylab("Residual") +
+  # Plot the rest of the dataset with 10% opacity:
+  geom_point(data=R_new[R_new$group=="gene",], 
+             mapping=aes(x=component, y=value),col="darkgrey", alpha=0.1) +
+  geom_line(data=R_new[R_new$group=="gene",], 
+            mapping=aes(x=component, y=value),col="darkgrey", alpha=0.1) +
+  # Plot baits
+  geom_point(data=R_new[R_new$group=="baits",], 
+             mapping=aes(x=component, y=value, color=group)) +
+  geom_line(data=R_new[R_new$group=="baits",], 
+             mapping=aes(x=component, y=value, color=group)) +
+  # Plot Top candidates:
+  geom_point(data=R_new[R_new$group=="spikes",], 
+             mapping=aes(x=component, y=value, color=group)) + 
+  geom_line(data=R_new[R_new$group=="spikes",], 
+             mapping=aes(x=component, y=value, color=group)) 
+```
+```{r}
+R_new
+```
+
+```{r}
+```
+
+```{r}
+R_new <- as.data.frame(R)
+R_new$group <- "gene"
+R_new$group[rownames(R_new) %in% baits] <- "baits"
+R_new$group[rownames(R_new) %in% spikes] <- "spikes"
+ggplot(data=R_new, mapping=aes(x=`Comp 1`, y=`Comp 2`, col=group)) + geom_point()
+```
+

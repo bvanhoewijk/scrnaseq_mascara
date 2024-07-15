@@ -1,0 +1,207 @@
+```{r}
+rm(list=ls())
+
+library(dplyr)
+library(Seurat)
+library(patchwork)
+
+dirs <- setNames(c("data/run_count_rep1/outs/filtered_feature_bc_matrix/", "data/run_count_rep2/outs/filtered_feature_bc_matrix/"), c("rep1", "rep2"))
+
+# Load the PBMC dataset
+pbmc.data <- Read10X(data.dir = dirs)
+
+	
+# min.cells: Include features detected in at least this many cells. Will subset the counts matrix as well. To reintroduce excluded features, create a new object with a lower cutoff
+# min.features: Include cells where at least this many features are detected
+pbmc <- CreateSeuratObject(counts = pbmc.data, project = "tomato", min.cells = 3, min.features = 200)
+pbmc
+```
+
+An object of class Seurat 24479 features across 32145 samples within 1 assay Active assay: RNA (24479 features, 0 variable features) 1 layer present: counts
+
+```{r}
+non_gene <- grep("gene", rownames(pbmc), invert = TRUE)
+rownames(pbmc)[non_gene] <- paste0("MT:", rownames(pbmc)[non_gene])
+```
+
+```{r}
+tail(rownames(pbmc))
+```
+
+-   The percentage of reads that map to the mitochondrial genome
+    -   Low-quality / dying cells often exhibit extensive mitochondrial contamination
+    -   We calculate mitochondrial QC metrics with the PercentageFeatureSet() function, which calculates the percentage of counts originating from a set of features
+    -   We use the set of all genes starting with MT- as a set of mitochondrial genes
+
+```{r}
+pbmc[["percent.MT"]] <- PercentageFeatureSet(pbmc, pattern = "^MT")
+```
+
+```{r}
+par(mfrow=c(1,1))
+hist(pbmc[["percent.MT"]][,1], main="Percentage MT", xlab="percentage", xlim=c(0,10), breaks = 100)
+```
+
+```{r}
+VlnPlot(pbmc, features = c("nFeature_RNA", "nCount_RNA", "percent.MT"), ncol = 3, pt.size=0)
+```
+
+```{r}
+plot1 <- FeatureScatter(pbmc, feature1 = "nCount_RNA", feature2 = "percent.MT")
+plot2 <- FeatureScatter(pbmc, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+plot1 + plot2
+```
+
+This function calls sctransform::vst. The sctransform package is available at https://github.com/satijalab/sctransform. Use this function as an alternative to the NormalizeData, FindVariableFeatures, ScaleData workflow. Results are saved in a new assay (named SCT by default) with counts being (corrected) counts, data being log1p(counts), scale.data being pearson residuals; sctransform::vst intermediate results are saved in misc slot of new assay.
+
+```{r}
+pbmc <- subset(pbmc, subset = nFeature_RNA > 300 & nFeature_RNA < 9000 & percent.MT < 2)
+pbmc
+```
+
+```{r}
+protoplast <- as.list(read.csv("data/protoplast_induced_genes.txt", header=FALSE))$V1
+protoplast <- gsub(pattern="\\.[0-9]+", "", protoplast)
+
+rownames2 <- gsub(pattern="\\.[0-9]+", "", rownames(pbmc))
+rownames2 <- gsub(pattern="gene:", "", rownames2)
+
+# To keep:
+to_keep <- !(rownames2 %in% protoplast)
+
+pbmc <- pbmc[to_keep,]
+
+table(to_keep)
+```
+
+```{r}
+VlnPlot(pbmc, features = c("nFeature_RNA", "nCount_RNA", "percent.MT", "percent.CP"), ncol = 4, pt.size=0)
+```
+
+-   We fix the slope parameter of the GLM to ln(10) with log10(total UMI) used as the predictor as proposed by Lause et al.
+-   We utilize an improved parameter estimation procedure that alleviates uncertainty and bias that result from fitting GLM models for very lowly expressed genes.
+-   We place a lower bound on gene-level standard deviation when calculating Pearson residuals. This prevents genes with extremely low expression (only 1-2 detected UMIs) from having a high pearson residual.
+
+```{r}
+# Remove the MT genes prior to normalizing.
+# Vector with percent.MT is still kept for transformation
+non_mt_genes <- grep("^MT", rownames(pbmc), invert=TRUE)
+pbmc <- pbmc[non_mt_genes,]
+
+# Normalizes, Scales and finds variable features
+pbmc <- SCTransform(pbmc, verbose=FALSE, vars.to.regress = c("percent.MT"), return.only.var.genes=FALSE, vst.flavor = "v2")
+```
+
+# UMAP with varying number of features
+
+```{r}
+nfeat <- 100
+pbmc <- FindVariableFeatures(pbmc, nfeatures = nfeat)
+# These are now standard steps in the Seurat workflow for visualization and clustering
+pbmc <- RunPCA(pbmc, verbose = FALSE, features=VariableFeatures(object=pbmc))
+ElbowPlot(pbmc, ndims = 50)
+pbmc <- RunUMAP(pbmc, dims = 1:35, verbose = FALSE)
+pbmc <- FindNeighbors(pbmc, dims = 1:35, verbose = FALSE)
+pbmc <- FindClusters(pbmc, verbose = FALSE)
+DimPlot(pbmc, label = TRUE)
+
+print(cat("Num features: ", length(VariableFeatures(object=pbmc)), "\n"))
+```
+
+```{r}
+nfeat <- 1000
+pbmc <- FindVariableFeatures(pbmc, nfeatures = nfeat)
+# These are now standard steps in the Seurat workflow for visualization and clustering
+pbmc <- RunPCA(pbmc, verbose = FALSE, features=VariableFeatures(object=pbmc))
+ElbowPlot(pbmc, ndims = 50)
+pbmc <- RunUMAP(pbmc, dims = 1:10, verbose = FALSE)
+pbmc <- FindNeighbors(pbmc, dims = 1:10, verbose = FALSE)
+pbmc <- FindClusters(pbmc, verbose = FALSE)
+DimPlot(pbmc, label = TRUE)
+
+print(cat("Num features: ", length(VariableFeatures(object=pbmc)), "\n"))
+```
+
+```{r}
+nfeat <- 2000
+pbmc <- FindVariableFeatures(pbmc, nfeatures = nfeat)
+# These are now standard steps in the Seurat workflow for visualization and clustering
+pbmc <- RunPCA(pbmc, verbose = FALSE, features=VariableFeatures(object=pbmc))
+ElbowPlot(pbmc, ndims = 50)
+pbmc <- RunUMAP(pbmc, dims = 1:10, verbose = FALSE)
+pbmc <- FindNeighbors(pbmc, dims = 1:10, verbose = FALSE)
+pbmc <- FindClusters(pbmc, verbose = FALSE)
+DimPlot(pbmc, label = TRUE)
+
+print(cat("Num features: ", length(VariableFeatures(object=pbmc)), "\n"))
+```
+
+```{r}
+nfeat <- 3000
+pbmc <- FindVariableFeatures(pbmc, nfeatures = nfeat)
+# These are now standard steps in the Seurat workflow for visualization and clustering
+pbmc <- RunPCA(pbmc, verbose = FALSE, features=VariableFeatures(object=pbmc))
+ElbowPlot(pbmc, ndims = 50)
+pbmc <- RunUMAP(pbmc, dims = 1:10, verbose = FALSE)
+pbmc <- FindNeighbors(pbmc, dims = 1:10, verbose = FALSE)
+pbmc <- FindClusters(pbmc, verbose = FALSE)
+DimPlot(pbmc, label = TRUE)
+
+print(cat("Num features: ", length(VariableFeatures(object=pbmc)), "\n"))
+```
+
+```{r}
+nfeat <- 6000
+pbmc <- FindVariableFeatures(pbmc, nfeatures = nfeat)
+# These are now standard steps in the Seurat workflow for visualization and clustering
+pbmc <- RunPCA(pbmc, verbose = FALSE, features=VariableFeatures(object=pbmc))
+ElbowPlot(pbmc, ndims = 50)
+pbmc <- RunUMAP(pbmc, dims = 1:10, verbose = FALSE)
+pbmc <- FindNeighbors(pbmc, dims = 1:10, verbose = FALSE)
+pbmc <- FindClusters(pbmc, verbose = FALSE)
+DimPlot(pbmc, label = TRUE)
+
+print(cat("Num features: ", length(VariableFeatures(object=pbmc)), "\n"))
+```
+
+```{r}
+nfeat <- 9000
+pbmc <- FindVariableFeatures(pbmc, nfeatures = nfeat)
+# These are now standard steps in the Seurat workflow for visualization and clustering
+pbmc <- RunPCA(pbmc, verbose = FALSE, features=VariableFeatures(object=pbmc))
+ElbowPlot(pbmc, ndims = 50)
+pbmc <- RunUMAP(pbmc, dims = 1:10, verbose = FALSE)
+pbmc <- FindNeighbors(pbmc, dims = 1:10, verbose = FALSE)
+pbmc <- FindClusters(pbmc, verbose = FALSE)
+DimPlot(pbmc, label = TRUE)
+
+print(cat("Num features: ", length(VariableFeatures(object=pbmc)), "\n"))
+```
+
+```{r}
+nfeat <- 12000
+pbmc <- FindVariableFeatures(pbmc, nfeatures = nfeat)
+# These are now standard steps in the Seurat workflow for visualization and clustering
+pbmc <- RunPCA(pbmc, verbose = FALSE, features=VariableFeatures(object=pbmc))
+ElbowPlot(pbmc, ndims = 50)
+pbmc <- RunUMAP(pbmc, dims = 1:10, verbose = FALSE)
+pbmc <- FindNeighbors(pbmc, dims = 1:10, verbose = FALSE)
+pbmc <- FindClusters(pbmc, verbose = FALSE)
+DimPlot(pbmc, label = TRUE)
+
+print(cat("Num features: ", length(VariableFeatures(object=pbmc)), "\n"))
+```
+
+```{r}
+nfeat <- 15000
+pbmc <- FindVariableFeatures(pbmc, nfeatures = nfeat)
+# These are now standard steps in the Seurat workflow for visualization and clustering
+pbmc <- RunPCA(pbmc, verbose = FALSE, features=VariableFeatures(object=pbmc))
+ElbowPlot(pbmc, ndims = 50)
+pbmc <- RunUMAP(pbmc, dims = 1:10, verbose = FALSE)
+pbmc <- FindNeighbors(pbmc, dims = 1:10, verbose = FALSE)
+pbmc <- FindClusters(pbmc, verbose = FALSE)
+DimPlot(pbmc, label = TRUE)
+
+print(cat("Num features: ", length(VariableFeatures(object=pbmc)), "\n"))
+```
