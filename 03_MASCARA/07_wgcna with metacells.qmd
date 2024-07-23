@@ -1,0 +1,234 @@
+---
+title: "Untitled"
+format: html
+editor: visual
+---
+
+# 1. Clean env and load packages
+
+```{r}
+rm(list=ls())
+gc()
+library(devtools)
+library(ggplot2)
+#library(MetStaT)
+library(gASCA)
+library(patchwork)
+library(readxl)
+library(ggfortify)
+library(ggrepel)
+library(grid)
+library(gridExtra)
+library(tidyr)
+library(tidyverse)
+library(reshape2)
+library(scales)
+library(matrixStats)
+library(DESeq2)
+library(MASS)
+library(glmnet)
+library(doParallel)    
+library(MUVR) 
+library(pheatmap)
+library(caret)
+library(data.table)
+library(plotly)
+library(mixOmics)
+#library(DiscriMiner)
+library(pracma)
+library(matlib)
+library(truncnorm)
+library(pls)
+library(Seurat)
+
+
+source("code/DATA_SIM_FUNCS.R")
+source("code/MASCARA_FUNCS.R")
+```
+
+## 1.1 Load data
+
+```{r}
+# pbmc <- readRDS("../02_scRNA_analysis/data/single_cell_pbmc.rds")
+pbmc <- readRDS("../02_scRNA_analysis/data/pbmc_with_scina.rds")
+```
+
+```{r}
+colnames(pbmc@meta.data)
+```
+
+```{r}
+table(pbmc@meta.data$SCINA)
+```
+
+# 2 MASCARA on suberin genes
+
+## 2.1 Summary statistics
+
+### 2.1.1 Dotplots of suberin genes
+
+To make sure we loaded the right data
+
+```{r}
+fig2e_genes <- c("Solyc05g051550","Solyc09g083050","Solyc03g005320","Solyc01g094750","Solyc02g014730","Solyc01g095750","Solyc01g094700","Solyc04g011600","Solyc06g074390","Solyc11g067180","Solyc03g097500","Solyc05g054890","Solyc09g065420","Solyc03g115960")
+found <- c()
+for(bait in fig2e_genes){
+  found <- c(found, rownames(pbmc)[grep(bait, rownames(pbmc))])
+  
+}
+for(item in c("chisquare", "scsorter", "sctype_classification", "SCINA")){
+  Idents(pbmc) <- item
+  p <- DotPlot(pbmc, features=found, scale=TRUE,) + RotatedAxis() + coord_flip() + ggtitle(item)
+  plot(p)
+}
+
+```
+
+## 2.2 Cleanup
+
+### 2.2.1 Drop unknowns
+
+```{r}
+pbmc <- pbmc[, pbmc$SCINA != "unknown"]
+pbmc
+```
+
+```{r}
+seurat_obj <- SetupForWGCNA(
+  pbmc,
+  gene_select = "fraction", # the gene selection approach
+  fraction = 0.01, # fraction of cells that a gene needs to be expressed in order to be included
+  wgcna_name = "tutorial" # the name of the hdWGCNA experiment
+)
+```
+
+### 2.2.2 Metacell creation
+
+```{r}
+# construct metacells  in each group
+seurat_obj <- MetacellsByGroups(
+  seurat_obj = seurat_obj,
+  group.by = c("SCINA"), # specify the columns in seurat_obj@meta.data to group by
+  reduction = 'pca', # select the dimensionality reduction to perform KNN on
+  k = 25, # nearest-neighbors parameter
+  max_shared = 15, # maximum number of shared cells between two metacells
+  ident.group = 'SCINA' # set the Idents of the metacell seurat object
+)
+
+# normalize metacell expression matrix:
+seurat_obj <- NormalizeMetacells(seurat_obj)
+```
+
+```{r}
+seurat_obj <- ScaleMetacells(seurat_obj, features=VariableFeatures(seurat_obj))
+seurat_obj <- RunPCAMetacells(seurat_obj, features=VariableFeatures(seurat_obj))
+seurat_obj <- RunHarmony(seurat_obj, "SCINA")
+seurat_obj <- RunUMAPMetacells(seurat_obj, reduction='pca', dims=1:15)
+
+p1 <- DimPlotMetacells(seurat_obj, group.by='SCINA') + umap_theme()
+p1
+```
+
+```{r}
+metacell_obj <- GetMetacellObject(seurat_obj)
+```
+
+```{r}
+seurat_obj <- SetDatExpr(
+  seurat_obj,
+  group_name = "Exodermis", # the name of the group of interest in the group.by column
+  group.by='SCINA', # the metadata column containing the cell type info. This same column should have also been used in MetacellsByGroups
+  slot = 'data', # using normalized data
+  assay = "SCT"
+)
+```
+
+```{r}
+# Test different soft powers:
+seurat_obj <- TestSoftPowers(
+  seurat_obj,
+  networkType = 'signed' # you can also use "unsigned" or "signed hybrid"
+)
+
+# plot the results:
+plot_list <- PlotSoftPowers(seurat_obj)
+
+# assemble with patchwork
+wrap_plots(plot_list, ncol=2)
+```
+
+```{r}
+power_table <- GetPowerTable(seurat_obj)
+head(power_table)
+```
+
+```{r}
+# construct co-expression network:
+seurat_obj <- ConstructNetwork(
+  seurat_obj,
+  tom_name = 'INH' # name of the topoligical overlap matrix written to disk
+)
+```
+
+```{r}
+#write_rds(seurat_obj, file = "data/seurat_obj_wgcna_clustered.rds")
+```
+
+```{r}
+PlotDendrogram(seurat_obj, main='hdWGCNA Dendrogram')
+
+```
+
+```{r}
+OM <- GetTOM(seurat_obj)
+```
+
+```{r}
+# need to run ScaleData first or else harmony throws an error:
+#seurat_obj <- ScaleData(seurat_obj, features=VariableFeatures(seurat_obj))
+
+# compute all MEs in the full single-cell dataset
+seurat_obj <- ModuleEigengenes(seurat_obj)
+```
+
+```{r}
+# harmonized module eigengenes:
+hMEs <- GetMEs(seurat_obj)
+
+# module eigengenes:
+MEs <- GetMEs(seurat_obj, harmonized=FALSE)
+```
+
+```{r}
+plot_list <- ModuleFeaturePlot(
+  seurat_obj,
+  features='hMEs', # plot the hMEs
+  order=TRUE # order so the points with highest hMEs are on top
+)
+
+# stitch together with patchwork
+wrap_plots(plot_list, ncol=6)
+```
+
+```{r}
+# get the module assignment table:
+modules <- GetModules(seurat_obj) %>% subset(module != 'grey')
+
+# show the first 6 columns:
+modules
+```
+
+```{r}
+found <- c()
+baits <- c("Solyc05g051550","Solyc09g083050","Solyc03g005320","Solyc01g094750","Solyc02g014730","Solyc01g095750","Solyc01g094700","Solyc04g011600","Solyc06g074390","Solyc11g067180","Solyc03g097500","Solyc05g054890","Solyc09g065420","Solyc03g115960")
+found <- unlist(lapply(baits, function(x)(grep(x, modules$gene_name))))
+found
+```
+
+```{r}
+modules[found,]
+```
+
+```{r}
+modules |> subset(module == 'blue')
+```

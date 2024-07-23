@@ -1,0 +1,589 @@
+# QC and selecting cells for further analysis
+Seurat allows you to easily explore QC metrics and filter cells based on any user-defined criteria. A few QC metrics commonly used by the community include
+
+- The number of unique genes detected in each cell.
+  - Low-quality cells or empty droplets will often have very few genes
+  - Cell doublets or multiplets may exhibit an aberrantly high gene count
+- Similarly, the total number of molecules detected within a cell (correlates strongly with unique genes)
+```{r}
+rm(list=ls())
+
+library(dplyr)
+library(Seurat)
+library(patchwork)
+
+dirs <- setNames(c("../02_scRNA_analysis/data/run_count_rep1/outs/filtered_feature_bc_matrix/", "../02_scRNA_analysis/data/run_count_rep1/outs/filtered_feature_bc_matrix/"), c("rep1", "rep2"))
+
+# Load the PBMC dataset
+pbmc.data <- Read10X(data.dir = dirs)
+
+	
+# min.cells: Include features detected in at least this many cells. Will subset the counts matrix as well. To reintroduce excluded features, create a new object with a lower cutoff
+# min.features: Include cells where at least this many features are detected
+pbmc <- CreateSeuratObject(counts = pbmc.data, project = "tomato", min.cells = 3, min.features = 200)
+pbmc
+```
+
+An object of class Seurat 
+24479 features across 32145 samples within 1 assay 
+Active assay: RNA (24479 features, 0 variable features)
+ 1 layer present: counts
+ 
+```{r}
+non_gene <- grep("gene", rownames(pbmc), invert = TRUE)
+rownames(pbmc)[non_gene] <- paste0("MT:", rownames(pbmc)[non_gene])
+```
+
+```{r}
+tail(rownames(pbmc))
+```
+- The percentage of reads that map to the mitochondrial genome
+  - Low-quality / dying cells often exhibit extensive mitochondrial contamination
+  - We calculate mitochondrial QC metrics with the PercentageFeatureSet() function, which calculates the percentage of counts originating from a set of features
+  - We use the set of all genes starting with MT- as a set of mitochondrial genes
+
+```{r}
+pbmc[["percent.MT"]] <- PercentageFeatureSet(pbmc, pattern = "^MT")
+```
+```{r}
+par(mfrow=c(1,1))
+hist(pbmc[["percent.MT"]][,1], main="Percentage MT", xlab="percentage", xlim=c(0,10), breaks = 100)
+```
+
+```{r}
+VlnPlot(pbmc, features = c("nFeature_RNA", "nCount_RNA", "percent.MT"), ncol = 3, pt.size=0)
+```
+
+```{r}
+plot1 <- FeatureScatter(pbmc, feature1 = "nCount_RNA", feature2 = "percent.MT")
+plot2 <- FeatureScatter(pbmc, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+plot1 + plot2
+```
+
+This function calls sctransform::vst. The sctransform package is available at https://github.com/satijalab/sctransform. Use this function as an alternative to the NormalizeData, FindVariableFeatures, ScaleData workflow. Results are saved in a new assay (named SCT by default) with counts being (corrected) counts, data being log1p(counts), scale.data being pearson residuals; sctransform::vst intermediate results are saved in misc slot of new assay.
+
+
+```{r}
+pbmc <- subset(pbmc, subset = nFeature_RNA > 300 & nFeature_RNA < 9000 & percent.MT < 2)
+pbmc
+```
+```{r}
+protoplast <- as.list(read.csv("../02_scRNA_analysis/data/protoplast_induced_genes.txt", header=FALSE))$V1
+protoplast <- gsub(pattern="\\.[0-9]+", "", protoplast)
+
+rownames2 <- gsub(pattern="\\.[0-9]+", "", rownames(pbmc))
+rownames2 <- gsub(pattern="gene:", "", rownames2)
+
+# To keep:
+to_keep <- !(rownames2 %in% protoplast)
+
+pbmc <- pbmc[to_keep,]
+
+table(to_keep)
+```
+
+```{r}
+strigolactone_genes <- c("Solyc09g065750","Solyc01g090660","Solyc08g066650","Solyc08g062950", "Solyc10g018150","Solyc02g084930", "Solyc08g067620", "Solyc08g067610")
+suberin_genes <- c("Solyc05g051550","Solyc09g083050","Solyc03g005320","Solyc01g094750","Solyc02g014730","Solyc01g095750","Solyc01g094700","Solyc04g011600","Solyc06g074390","Solyc11g067180","Solyc03g097500","Solyc05g054890","Solyc09g065420","Solyc03g115960")
+found <- c()
+for(bait in strigolactone_genes){
+  found <- c(found, rownames(pbmc)[grep(bait, rownames(pbmc))])
+}
+found
+```
+
+```{r}
+# Select strigolactone_genes genes and calculate the sum of the expression
+# if that sum is > 1: keep
+expr <- GetAssayData(pbmc)
+strigolactone_expression_cells <- colSums(expr[rownames(expr) %in% found,]) > 1
+
+pbmc_selection <- pbmc[,strigolactone_expression_cells]
+table(strigolactone_expression_cells)
+```
+
+
+
+```{r}
+VlnPlot(pbmc_selection, features = c("nFeature_RNA", "nCount_RNA", "percent.MT", "percent.CP"), ncol = 4, pt.size=0)
+```
+
+- We fix the slope parameter of the GLM to ln(10)
+ with log10(total UMI)
+ used as the predictor as proposed by Lause et al.
+- We utilize an improved parameter estimation procedure that alleviates uncertainty and bias that result from fitting GLM models for very lowly expressed genes.
+- We place a lower bound on gene-level standard deviation when calculating Pearson residuals. This prevents genes with extremely low expression (only 1-2 detected UMIs) from having a high pearson residual.
+```{r}
+# Remove the MT genes prior to normalizing.
+# Vector with percent.MT is still kept for transformation
+non_mt_genes <- grep("^MT", rownames(pbmc_selection), invert=TRUE)
+pbmc_selection <- pbmc_selection[non_mt_genes,]
+
+# Normalizes, Scales and finds variable features
+pbmc_selection <- SCTransform(pbmc_selection, verbose=FALSE, vars.to.regress = c("percent.MT"), return.only.var.genes=FALSE, vst.flavor = "v2")
+```
+
+
+```{r}
+# These are now standard steps in the Seurat workflow for visualization and clustering
+pbmc_selection <- RunPCA(pbmc_selection, verbose = FALSE, features=VariableFeatures(object=pbmc_selection))
+ElbowPlot(pbmc_selection, ndims = 50)
+```
+
+
+```{r}
+pbmc_selection <- RunUMAP(pbmc_selection, dims = 1:10, verbose = FALSE)
+```
+```{r}
+pbmc_selection <- FindNeighbors(pbmc_selection, dims = 1:10, verbose = FALSE)
+pbmc_selection <- FindClusters(pbmc_selection, verbose = FALSE)
+DimPlot(pbmc_selection, label = TRUE)
+pbmc_selection$seurat_clusters <- Idents(pbmc_selection)
+```
+
+
+```{r}
+#saveRDS(pbmc, file = "pbmd_tomato_rep2.rds")
+```
+
+```{r}
+seurat_markers <- FindAllMarkers(pbmc_selection, min.pct = 0.1, logfc.threshold = 0.25)
+```
+```{r}
+Idents(pbmc_selection) <- "seurat_clusters"
+# table(pbmc$seurat_clusters)
+```
+
+# plots
+```{r}
+DimHeatmap(pbmc_selection, dims = 2, cells = 500, balanced = TRUE)
+```
+
+# Part 1B: Single cell cluster annotation
+
+## Chisquare
+Clusters were annotated based on the overlap of cluster maker genes and a set of cell type-enriched marker genes from ref.23. 
+
+
+```{r}
+seurat_markers$gene <- gsub("\\..*$", "", seurat_markers$gene)
+seurat_markers$gene <- gsub(pattern = "gene:", "", seurat_markers$gene)
+seurat_markers <- subset(seurat_markers, p_val_adj < 0.05)
+head(seurat_markers)
+```
+
+```{r}
+library(tidyverse)
+signatures <- read.csv("../02_scRNA_analysis/data/signatures_simplified.tsv", sep="\t")
+signatures <- gather(signatures)
+colnames(signatures) <- c("Type", "Marker")
+
+# Mutually exclusive:
+signatures <- signatures[signatures['Marker'] != "",]
+signatures <- signatures[!duplicated(signatures['Marker']),]
+
+# Strip prefix:
+signatures$Marker <- gsub(pattern = "gene:", "", signatures$Marker)
+table(signatures$Type)
+head(signatures)
+```
+```{R}
+signatures <- signatures[signatures$Marker %in% seurat_markers$gene, ]
+table(signatures$Type)
+```
+
+```{r}
+total_genes <- length(signatures$Marker)
+tissue_types <- length(unique(signatures$Type))
+cat("Total genes : ", total_genes, "\n")
+cat("Tissue types: ", tissue_types, "\n")
+
+# Tissue specific markers
+all_marker_genes <- signatures['Marker']
+result_df <- data.frame()
+for(T in unique(signatures$Type)){
+    T_markers <- subset(signatures, Type == T)$Marker
+    # Seurat defined marker list
+    for(C in unique(seurat_markers$cluster)){
+        S_markers <- subset(seurat_markers, cluster == C)$gene
+        a <- sum(T_markers %in% S_markers)
+        b <- length(T_markers) - sum(T_markers %in% S_markers)
+        c <- sum(S_markers %in% all_marker_genes$Marker) - a
+        d <- sum(!(S_markers %in% all_marker_genes)) / tissue_types
+
+        contingency_table <- matrix(c(a, b, c, d), nrow=2, byrow=TRUE)
+        chi_square_test <- chisq.test(contingency_table)$p.value * tissue_types 
+        result_df <- rbind(result_df, c(T, C, a, b, c, d, chi_square_test))
+    }
+}
+colnames(result_df) <-  c("TissueType", "SeuratCluster", "O1", "E1", "O2", "E2", "P")
+result_df$P <- as.numeric(result_df$P)
+result_df$E2 <- as.numeric(result_df$E2)
+result_df$O2 <- as.numeric(result_df$O2)
+result_df$E1 <- as.numeric(result_df$E1)
+result_df$O1 <- as.numeric(result_df$O1)
+```
+```{r}
+length(unique(signatures$Type))
+```
+
+```{r}
+head(result_df)
+```
+
+```{r}
+arg_result_max <- data.frame()
+for(C in unique(result_df$SeuratCluster)){
+    result_subset <- subset(result_df, SeuratCluster == C)
+    s <- result_subset[which.max(result_subset$P), ]
+    arg_result_max <- rbind(arg_result_max, s)
+}
+arg_result_max
+```
+
+
+```{r}
+pbmc_selection$chisquare <- "Unknown"
+for(C in unique(arg_result_max$SeuratCluster)){
+  res = subset(arg_result_max, SeuratCluster == C)
+  if(res$P > 0.01){
+    pbmc_selection$chisquare[pbmc_selection$seurat_clusters == C] <- res$TissueType[1]
+  }
+}
+table(pbmc_selection$chisquare)
+```
+```{r}
+Idents(pbmc_selection) <- "chisquare"
+DimPlot(pbmc_selection, reduction = "umap", label=TRUE) + xlim(-14, 14) + ylim(-14, 14) + ggtitle("Chisquare")
+```
+```{r}
+found <- c()
+Idents(pbmc) <- "chisquare"
+for(bait in strigolactone_genes){
+  found <- c(found, rownames(pbmc)[grep(bait, rownames(pbmc))])
+  
+}
+p <- DotPlot(pbmc, features=found) + RotatedAxis() + coord_flip() + ggtitle("Chi-Square")
+p 
+```
+
+
+## ScType
+
+```{r}
+signatures <- read.csv("../02_scRNA_analysis/data/signatures_simplified.tsv", sep="\t")
+signatures <- gather(signatures)
+colnames(signatures) <- c("Type", "Marker")
+
+# Mutually exclusive:
+signatures <- signatures[signatures['Marker'] != "",]
+signatures <- signatures[!duplicated(signatures['Marker']),]
+signatures$Marker <- gsub(pattern = "gene:", "", signatures$Marker)
+
+DefaultAssay(pbmc_selection) <- "SCT"
+expr <- GetAssayData(pbmc_selection)
+
+rownames(expr) <- gsub("\\..*$", "", rownames(expr))
+rownames(expr) <- gsub(pattern = "gene:", "", rownames(expr))
+expr_mat <- as.matrix(expr)
+```
+
+
+### Stats on marker gene expression
+```{r}
+marker_gene_expression <- expr_mat[rownames(expr_mat) %in% signatures$Marker,]
+dim(marker_gene_expression)
+```
+```{r}
+# Percentage:
+cutoff <- 1
+
+# Genes with more than 0 count per cell
+a <- rowSums(apply(marker_gene_expression, 2, function(x) {x > 0})) / ncol(marker_gene_expression) * 100
+title <- paste0(">",cutoff,"% of cells has gene expressed\n with gene count >0 (", length(a[a>cutoff]),"/",length(signatures$Marker), ")")
+
+
+sel <- names(a[a > cutoff])
+length(sel)
+```
+
+
+
+
+
+```{r}
+# load libraries and functions
+lapply(c("dplyr","Seurat","HGNChelper"), library, character.only = TRUE)
+source("https://raw.githubusercontent.com/IanevskiAleksandr/sc-type/master/R/gene_sets_prepare.R"); 
+source("https://raw.githubusercontent.com/IanevskiAleksandr/sc-type/master/R/sctype_score_.R")
+
+DefaultAssay(pbmc_selection) <- "SCT"
+expr <- GetAssayData(pbmc_selection)
+
+var_feat <- VariableFeatures(pbmc_selection, nfeatures=3000)
+expr <- expr[rownames(expr) %in% var_feat,]
+
+
+rownames(expr) <- gsub("\\..*$", "", rownames(expr))
+rownames(expr) <- gsub(pattern = "gene:", "", rownames(expr))
+expr_mat <- as.matrix(expr)
+
+
+# load signatures:
+signatures <- read.csv("../02_scRNA_analysis/data/signatures_simplified.tsv", sep="\t")
+signatures <- gather(signatures)
+colnames(signatures) <- c("Type", "Marker")
+
+# Mutually exclusive:
+signatures <- signatures[signatures['Marker'] != "",]
+signatures <- signatures[!duplicated(signatures['Marker']),]
+
+# Strip prefix:
+signatures$Marker <- gsub(pattern = "gene:", "", signatures$Marker)
+
+
+# Select marker genes with more than 1% occurence over cells:
+
+anno <- list()
+for(type in unique(signatures[["Type"]])){
+    selection <- signatures$Marker[signatures["Type"] == type]
+    # Anyway expressed
+    selection <- selection[selection %in% rownames(expr_mat)]
+    # Occurance filter
+    selection <- selection[selection %in% sel]
+    anno[[type]] <- head(selection, 25)
+}
+
+```
+
+```{r}
+sctype_score <- function(scRNAseqData, scaled = !0, gs, gs2 = NULL, gene_names_to_uppercase = !0, ...){
+  
+  # check input matrix
+  if(!is.matrix(scRNAseqData)){
+    warning("scRNAseqData doesn't seem to be a matrix")
+  } else {
+    if(sum(dim(scRNAseqData))==0){
+       warning("The dimension of input scRNAseqData matrix equals to 0, is it an empty matrix?")
+    }
+  }
+  
+  # marker sensitivity
+  marker_stat = sort(table(unlist(gs)), decreasing = TRUE); 
+  marker_sensitivity = data.frame(score_marker_sensitivity = scales::rescale(as.numeric(marker_stat), to = c(0,1), from = c(length(gs),1)),
+                                      gene_ = names(marker_stat), stringsAsFactors = !1)
+
+  # subselect genes only found in data
+  names_gs_cp = names(gs); names_gs_2_cp = names(gs2);
+  gs = lapply(1:length(gs), function(d_){ 
+    GeneIndToKeep = rownames(scRNAseqData) %in% as.character(gs[[d_]]); rownames(scRNAseqData)[GeneIndToKeep]})
+  gs2 = lapply(1:length(gs2), function(d_){ 
+    GeneIndToKeep = rownames(scRNAseqData) %in% as.character(gs2[[d_]]); rownames(scRNAseqData)[GeneIndToKeep]})
+  names(gs) = names_gs_cp; names(gs2) = names_gs_2_cp;
+  cell_markers_genes_score = marker_sensitivity[marker_sensitivity$gene_ %in% unique(unlist(gs)),]
+  
+  # z-scale if not
+  if(!scaled) Z <- t(scale(t(scRNAseqData))) else Z <- scRNAseqData
+  
+  # multiple by marker sensitivity
+  for(jj in 1:nrow(cell_markers_genes_score)){
+    Z[cell_markers_genes_score[jj,"gene_"], ] = Z[cell_markers_genes_score[jj,"gene_"], ] * cell_markers_genes_score[jj, "score_marker_sensitivity"]
+  }
+  
+  # subselect only with marker genes
+  Z = Z[unique(c(unlist(gs),unlist(gs2))), ]
+  
+  # combine scores
+  es = do.call("rbind", lapply(names(gs), function(gss_){ 
+    sapply(1:ncol(Z), function(j) {
+      gs_z = Z[gs[[gss_]], j]; gz_2 = Z[gs2[[gss_]], j] * -1
+      sum_t1 = (sum(gs_z) / sqrt(length(gs_z))); sum_t2 = sum(gz_2) / sqrt(length(gz_2));
+      if(is.na(sum_t2)){
+        sum_t2 = 0;
+      }
+      sum_t1 + sum_t2
+    })
+  })) 
+  
+  dimnames(es) = list(names(gs), colnames(Z))
+  es.max <- es[!apply(is.na(es) | es == "", 1, all),] # remove na rows
+ 
+  es.max
+}
+```
+
+```{r}
+es.max <- sctype_score(scRNAseqData = expr_mat, scaled = TRUE, gs = anno)
+```
+
+```{r}
+cL_resutls <- do.call("rbind", lapply(unique(pbmc_selection@meta.data$seurat_clusters), function(cl){
+    es.max.cl = sort(rowSums(es.max[ ,rownames(pbmc_selection@meta.data[pbmc_selection@meta.data$seurat_clusters==cl, ])]), decreasing = !0)
+    head(data.frame(cluster = cl, type = names(es.max.cl), scores = es.max.cl, ncells = sum(pbmc_selection@meta.data$seurat_clusters==cl)), 10)
+}))
+sctype_scores <- cL_resutls %>% group_by(cluster) %>% top_n(n = 1, wt = scores)  
+
+# set low-confident (low ScType score) clusters to "unknown"
+sctype_scores$type[as.numeric(as.character(sctype_scores$scores)) < sctype_scores$ncells/4] <- "Unknown"
+print(sctype_scores[,1:3])
+```
+
+```{r}
+pbmc_selection@meta.data$sctype_classification = ""
+for(j in unique(sctype_scores$cluster)){
+  cl_type = sctype_scores[sctype_scores$cluster==j,]; 
+  pbmc_selection@meta.data$sctype_classification[pbmc_selection@meta.data$seurat_clusters == j] = as.character(cl_type$type[1])
+}
+
+DimPlot(pbmc_selection, reduction = "umap", label = TRUE, repel = TRUE, group.by = 'sctype_classification')  
+```
+
+
+```{r}
+Idents(pbmc_selection) <- "sctype_classification"
+found <- c()
+for(bait in strigolactone_genes){
+  found <- c(found, rownames(pbmc)[grep(bait, rownames(pbmc))])
+  
+}
+p <- DotPlot(pbmc_selection, features=found, scale=TRUE,) + RotatedAxis() + coord_flip() + ggtitle("scType")
+p 
+```
+## SCINA
+
+```{r}
+library('SCINA')
+```
+
+```{r}
+signatures <- read.csv("../02_scRNA_analysis/data/signatures_simplified.tsv", sep="\t")
+
+DefaultAssay(pbmc_selection) <- "SCT"
+expr <- GetAssayData(pbmc_selection)
+
+rownames(expr) <- gsub("\\..*$", "", rownames(expr))
+rownames(expr) <- gsub(pattern = "gene:", "", rownames(expr))
+expr_mat <- as.matrix(expr)
+```
+```{r}
+signatures <- preprocess.signatures("../02_scRNA_analysis/data//signatures_simplified.csv")
+```
+
+
+```{r}
+str(signatures)
+for( item in names(signatures)){
+  signatures[[item]] <- head(signatures[[item]], 100)
+}
+str(signatures)
+```
+
+```{r}
+results = SCINA(expr, signatures, max_iter = 150, convergence_n = 10, 
+    convergence_rate = 0.999, sensitivity_cutoff = 0.99, rm_overlap=TRUE, allow_unknown=TRUE, log_file='SCINA.log')
+
+table(results$cell_labels)
+```
+
+```{r}
+pbmc_selection@meta.data$SCINA <- results$cell_labels
+# write_rds(pbmc, file="02_scRNA_analysis/data/pbmc_with_scina.rds")
+```
+
+```{r}
+pbmc.sub <- pbmc_selection[, pbmc_selection@meta.data$SCINA != "unknown"]
+DimPlot(pbmc.sub, reduction = "umap", label = TRUE, repel = TRUE, group.by = 'SCINA')  
+```
+
+
+```{r}
+DimPlot(pbmc_selection, reduction = "umap", label = TRUE, repel = TRUE, group.by = 'SCINA')  
+```
+```{r}
+Idents(pbmc_selection) <- "SCINA"
+found <- c()
+for(bait in strigolactone_genes){
+  found <- c(found, rownames(pbmc)[grep(bait, rownames(pbmc))])
+  
+}
+p <- DotPlot(pbmc_selection, features=found, scale=TRUE,) + RotatedAxis() + coord_flip() + ggtitle("SCINA")
+p 
+```
+
+
+# Part 2: Dot plots per method
+```{r}
+fig2e_genes <- c("Solyc05g051550","Solyc09g083050","Solyc03g005320","Solyc01g094750","Solyc02g014730","Solyc01g095750","Solyc01g094700","Solyc04g011600","Solyc06g074390","Solyc11g067180","Solyc03g097500","Solyc05g054890","Solyc09g065420","Solyc03g115960")
+found <- c()
+for(bait in strigolactone_genes){
+  found <- c(found, rownames(pbmc)[grep(bait, rownames(pbmc))])
+  
+}
+for(item in c("chisquare", "sctype_classification", "SCINA")){
+  Idents(pbmc_selection) <- item
+  p <- DotPlot(pbmc_selection, features=found, scale=TRUE,) + RotatedAxis() + coord_flip() + ggtitle(item)
+  plot(p)
+}
+```
+# MASCARA 
+
+```{r}
+meta.sub <- pbmc_selection@meta.data
+meta <- data.frame(chisquare=meta.sub$chisquare, 
+                   sctype=meta.sub$sctype,
+                   SCINA=meta.sub$SCINA)
+meta
+```
+```{r}
+as.data.frame(table(meta$sctype)) |> ggplot() + 
+  geom_col(aes(y=Var1, x=Freq)) + 
+  xlab("Cell count") + 
+  ylab("Celltype")
+```
+```{r}
+counts.sub <- as.matrix(GetAssayData(pbmc_selection))
+ar <- ASCA_decompose(d = meta, x = t(counts.sub), f = "sctype")
+resids <- ar$residuals
+```
+
+```{r}
+found <- found[found %in% colnames(resids)]
+found
+```
+
+```{r}
+cormat <- cor(resids[,which(colnames(resids) %in% found)])
+
+melted_cormat <- melt(cormat)
+
+ggplot(data=melted_cormat, aes(x=Var1, y=Var2, fill=value)) + 
+  geom_tile() + 
+  xlab("") +
+  ylab("") +
+  geom_text(aes(label=round(value, 2)), color="white") +
+  scale_fill_gradient2(low = "#075AFF",
+                       mid = "#FFFFCC",
+                       high = "#FF0000",
+                       breaks=c(-1, 0, 1),
+                       limits=c(-1,1)) +
+  theme(axis.text.x = element_text(angle=90, vjust=.5, hjust=1))
+```
+```{r}
+counts.sub.t <- t(counts.sub)
+cormat <- cor(counts.sub.t[,which(colnames(counts.sub.t) %in% found)])
+
+melted_cormat <- melt(cormat)
+
+ggplot(data=melted_cormat, aes(x=Var1, y=Var2, fill=value)) + 
+  geom_tile() + 
+  xlab("") +
+  ylab("") +
+  geom_text(aes(label=round(value, 2)), color="white") +
+  scale_fill_gradient2(low = "#075AFF",
+                       mid = "#FFFFCC",
+                       high = "#FF0000",
+                       breaks=c(-1, 0, 1),
+                       limits=c(-1,1)) +
+  theme(axis.text.x = element_text(angle=90, vjust=.5, hjust=1))
+```
+
