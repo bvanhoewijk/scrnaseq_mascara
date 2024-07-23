@@ -87,13 +87,14 @@ for(item in c("chisquare", "scsorter", "sctype_classification", "SCINA")){
 ## 2.2 Cleanup
 
 ### 2.2.1 Drop unknowns
+
 ```{r}
 pbmc <- pbmc[, pbmc$SCINA != "unknown"]
 pbmc
 ```
 
+### 2.2.2 Selection of expressed cells
 
-### 2.2.2 Selection of expressed cells 
 ```{r}
 fig2e_genes <- c("Solyc05g051550","Solyc09g083050","Solyc03g005320","Solyc01g094750","Solyc02g014730","Solyc01g095750","Solyc01g094700","Solyc04g011600","Solyc06g074390","Solyc11g067180","Solyc03g097500","Solyc05g054890","Solyc09g065420","Solyc03g115960")
 found <- c()
@@ -108,9 +109,11 @@ suberin_expression_cells <- colSums(expr[rownames(expr) %in% found,]) > 1
 pbmc_suberin <- pbmc[,suberin_expression_cells]
 table(suberin_expression_cells)
 ```
+
 ```{r}
 DimPlot(pbmc_suberin)
 ```
+
 ```{r}
 pbmc_suberin <- FindVariableFeatures(pbmc_suberin)
 pbmc_suberin <- RunPCA(pbmc_suberin, verbose = FALSE, features=VariableFeatures(object=pbmc_suberin))
@@ -122,20 +125,27 @@ pbmc_suberin <- RunUMAP(pbmc, dims = 1:15, verbose = FALSE)
 DimPlot(pbmc_suberin, label = TRUE, group.by = "SCINA")
 ```
 
-
 ### 2.2.3 Selection of expressed genes
-```{r}
-counts.sub <- as.matrix(GetAssayData(pbmc_suberin))
-non_zero <- apply(counts.sub, 1, function(x) sum(x > 0)/length(x))
 
-# At least 5% data:
-counts.sub <- counts.sub[non_zero > 0.05, ]
-cat("Cells: ", dim(counts.sub)[2], "\n")
-cat("Genes: ", dim(counts.sub)[1], "\n")
+```{r}
+fig2e_genes <- c("Solyc05g051550","Solyc09g083050","Solyc03g005320","Solyc01g094750","Solyc02g014730","Solyc01g095750","Solyc01g094700","Solyc04g011600","Solyc06g074390","Solyc11g067180","Solyc03g097500","Solyc05g054890","Solyc09g065420","Solyc03g115960")
+found <- c()
+for(bait in fig2e_genes){
+  found <- c(found, rownames(pbmc_suberin)[grep(bait, rownames(pbmc_suberin))])
+}
+# Select suberin genes and calculate the sum of the expression
+# if that sum is > 1: keep
+expr <- GetAssayData(pbmc_suberin)
+suberin_expression_cells <- colSums(expr[rownames(expr) %in% found,]) > 1
+
+pbmc_suberin <- pbmc_suberin[,suberin_expression_cells]
+table(suberin_expression_cells)
+
+counts.sub <- GetAssayData(pbmc_suberin)
 ```
 
-
 ## 2.3 MASCARA
+
 ```{r}
 meta.sub <- pbmc_suberin@meta.data
 meta <- data.frame(scsorter=meta.sub$scsorter, 
@@ -145,6 +155,7 @@ meta <- data.frame(scsorter=meta.sub$scsorter,
                    SCINA=meta.sub$SCINA)
 meta
 ```
+
 ```{r}
 as.data.frame(table(meta$SCINA)) |> ggplot() + 
   geom_col(aes(y=Var1, x=Freq)) + 
@@ -153,6 +164,11 @@ as.data.frame(table(meta$SCINA)) |> ggplot() +
 ```
 
 ### 2.3.1 ASCA
+
+```{r}
+dim(meta)
+dim(counts.sub)
+```
 
 ```{r}
 ar <- ASCA_decompose(d = meta, x = t(counts.sub), f = "SCINA")
@@ -164,6 +180,30 @@ hist(resids)
 ```
 
 ### 2.3.2 Correl plot
+
+```{r}
+dim(X)
+```
+
+```{r}
+
+X <- resids[,-which(colnames(resids) %in% found[1:4])]
+y <- resids[,which(colnames(resids) %in% found[1:4])]
+
+ncomp <- 10
+nrep  <- 5
+result <- data.frame(comp=1:ncomp)
+for(i in c(1:nrep)){
+  index <- sample(1:ncol(X), as.integer(ncol(X)*0.8))
+  X_small <- X[,index]
+  fit <- simpls.fit(X_small, y, ncomp = ncomp)
+  result[paste0("rep", i)] <- fit$Xvar/fit$Xtotvar
+}
+
+result_melt <- result |> pivot_longer(cols="rep1" : "rep5")
+ggplot(data=result_melt, mapping=aes(x=comp, y=value)) + geom_point() + geom_smooth() + geom_jitter() + xlab("Component") + ylab("Fraction explained variance") + scale_x_continuous(breaks=c(1:ncomp))
+```
+
 ```{r}
 cormat <- cor(resids[,which(colnames(resids) %in% found[1:4])])
 
@@ -184,11 +224,12 @@ ggplot(data=melted_cormat, aes(x=Var1, y=Var2, fill=value)) +
 ```
 
 ### 2.3.3 PLS + Candidates
+
 ```{r}
 library(pls)
 X <- resids[,-which(colnames(resids) %in% found[1:4])]
 y <- resids[,which(colnames(resids) %in% found[1:4])]
-spls_res <- simpls.fit(X, y, ncomp = 5)
+spls_res <- simpls.fit(X, y, ncomp = 3)
 
 q_bar <- colMeans(spls_res$Yloadings)
 R <- spls_res$projection
@@ -197,8 +238,8 @@ R_TP <- (dot(t(R),q_bar)/dot(q_bar,q_bar))
 Candidates <- as.data.frame(R_TP[order(R_TP, decreasing = TRUE)])
 ```
 
-
 ### 2.3.4 Lineplot the components
+
 ```{r}
 # Create color list of top20:
 cols <- rep("gene", nrow(R))
@@ -213,13 +254,14 @@ to_plot =  data.frame(x=R[, 1], y=R[,2], group=as.factor(cols))
 
 ggplot(data=to_plot, aes(x=x, y=y, color=group)) + geom_point()
 ```
+
 ```{r}
 R_new <- as.data.frame(R)
 R_new$group <- cols
 
 # Same function as depreciated `tidyverse::melt()`:
 R_new <- R_new |> rownames_to_column() |> 
-  pivot_longer(cols="Comp 1":"Comp 5", names_to = "component")
+  pivot_longer(cols="Comp 1":"Comp 3", names_to = "component")
 
 ggplot(R_new, aes(group=rowname)) + 
   ylab("Residual") +
@@ -244,6 +286,7 @@ ggplot(R_new, aes(group=rowname)) +
   geom_line(data=R_new[R_new$group=="Bottom 10",], 
              mapping=aes(x=component, y=value, color=group))
 ```
+
 ```{r}
 Candidates
 ```
@@ -253,12 +296,14 @@ resids_t <- t(resids)
 found %in% rownames(resids_t)
 ```
 
-
 ### 2.3.5 Plot example genes
+
 ```{r}
 library(scales)
-name1 <- rownames(Candidates)[2]
-name2 <- found[2]
+# name1 <- rownames(Candidates)[2]
+# name2 <- found[2]
+name1 <- "gene:Solyc03g097500.3"
+name2 <- "gene:Solyc09g083050.3"
 
 # Corrected counts (residuals)
 df1 <- data.frame(gene1=resids_t[name1, ], 
@@ -292,7 +337,6 @@ p2 <- ggplot(data=df2, aes(gene1, gene2)) +
 
 p1+p2
 ```
-
 
 # 3 MASCARA on strigolactone genes
 
@@ -328,14 +372,16 @@ for(item in c("chisquare", "scsorter", "sctype_classification", "SCINA")){
 ```
 
 ## 3.2 Cleanup
+
 ### 3.2.1 Drop unknowns
+
 ```{r}
 pbmc <- pbmc[, pbmc$SCINA != "unknown"]
 pbmc
 ```
 
+### 3.2.2 Selection of expressed cells
 
-### 3.2.2 Selection of expressed cells 
 ```{r}
 found <- c()
 for(bait in strigolactone_genes){
@@ -349,10 +395,13 @@ strigolactone_expression_cells <- colSums(expr[rownames(expr) %in% found,]) > 1
 pbmc_selection <- pbmc[,strigolactone_expression_cells]
 table(strigolactone_expression_cells)
 ```
+
 ```{r}
 DimPlot(pbmc_selection)
 ```
+
 ### 3.2.3 Selection of expressed genes
+
 ```{r}
 counts.sub <- as.matrix(GetAssayData(pbmc_selection))
 non_zero <- apply(counts.sub, 1, function(x) sum(x > 0)/length(x))
@@ -363,8 +412,8 @@ cat("Cells: ", dim(counts.sub)[2], "\n")
 cat("Genes: ", dim(counts.sub)[1], "\n")
 ```
 
-
 ## 3.3 MASCARA
+
 ```{r}
 meta.sub <- pbmc_selection@meta.data
 meta <- data.frame(scsorter=meta.sub$scsorter, 
@@ -374,6 +423,7 @@ meta <- data.frame(scsorter=meta.sub$scsorter,
                    SCINA=meta.sub$SCINA)
 meta
 ```
+
 ```{r}
 as.data.frame(table(meta$SCINA)) |> ggplot() + 
   geom_col(aes(y=Var1, x=Freq)) + 
@@ -382,6 +432,7 @@ as.data.frame(table(meta$SCINA)) |> ggplot() +
 ```
 
 ### 3.3.1 ASCA
+
 ```{r}
 ar <- ASCA_decompose(d = meta, x = t(counts.sub), f = "SCINA")
 resids <- ar$residuals
@@ -418,6 +469,7 @@ ggplot(data=melted_cormat, aes(x=Var1, y=Var2, fill=value)) +
 ```
 
 ### 3.3.3 PLS + Candidates
+
 ```{r}
 library(pls)
 X <- resids[,-which(colnames(resids) %in% found[1:4])]
@@ -432,6 +484,7 @@ Candidates <- as.data.frame(R_TP[order(R_TP, decreasing = TRUE)])
 ```
 
 ### 3.3.4 Lineplot the components
+
 ```{r}
 # Create color list of top20:
 cols <- rep("gene", nrow(R))
@@ -446,6 +499,7 @@ to_plot =  data.frame(x=R[, 1], y=R[,2], group=as.factor(cols))
 
 ggplot(data=to_plot, aes(x=x, y=y, color=group)) + geom_point()
 ```
+
 ```{r}
 R_new <- as.data.frame(R)
 R_new$group <- cols
@@ -477,6 +531,7 @@ ggplot(R_new, aes(group=rowname)) +
   geom_line(data=R_new[R_new$group=="Bottom 10",], 
              mapping=aes(x=component, y=value, color=group))
 ```
+
 ```{r}
 Candidates
 ```
@@ -487,6 +542,7 @@ found %in% rownames(resids_t)
 ```
 
 ### 3.3.5 Plot example genes
+
 ```{r}
 library(scales)
 name1 <- rownames(Candidates)[2]
@@ -524,5 +580,3 @@ p2 <- ggplot(data=df2, aes(gene1, gene2)) +
 
 p1+p2
 ```
-
-

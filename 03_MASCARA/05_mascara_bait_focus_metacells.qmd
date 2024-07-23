@@ -112,8 +112,7 @@ seurat_obj <- MetacellsByGroups(
   reduction = 'pca', # select the dimensionality reduction to perform KNN on
   k = 25, # nearest-neighbors parameter
   max_shared = 15, # maximum number of shared cells between two metacells
-  ident.group = 'SCINA', # set the Idents of the metacell seurat object
-  min_cells=100, # default
+  ident.group = 'SCINA' # set the Idents of the metacell seurat object
 )
 
 # normalize metacell expression matrix:
@@ -218,13 +217,33 @@ ggplot(data=melted_cormat, aes(x=Var1, y=Var2, fill=value)) +
 
 ```
 
-### 2.3.3 PLS + Candidates
+### 2.3.3 Number of components (elbow)
+
+```{r}
+X <- resids[,-which(colnames(resids) %in% found[1:4])]
+y <- resids[,which(colnames(resids) %in% found[1:4])]
+
+ncomp <- 10
+nrep  <- 5
+result <- data.frame(comp=1:ncomp)
+for(i in c(1:nrep)){
+  index <- sample(1:ncol(X), as.integer(ncol(X)*0.8))
+  X_small <- X[,index]
+  fit <- simpls.fit(X_small, y, ncomp = ncomp)
+  result[paste0("rep", i)] <- fit$Xvar/fit$Xtotvar
+}
+
+result_melt <- result |> pivot_longer(cols="rep1" : "rep5")
+ggplot(data=result_melt, mapping=aes(x=comp, y=value)) + geom_point() + geom_smooth() + geom_jitter() + xlab("Component") + ylab("Fraction explained variance") + scale_x_continuous(breaks=c(1:ncomp))
+```
+
+### 2.3.4 PLS + Candidates
 
 ```{r}
 library(pls)
 X <- resids[,-which(colnames(resids) %in% found[1:4])]
 y <- resids[,which(colnames(resids) %in% found[1:4])]
-spls_res <- simpls.fit(X, y, ncomp = 5)
+spls_res <- simpls.fit(X, y, ncomp = 3)
 
 q_bar <- colMeans(spls_res$Yloadings)
 R <- spls_res$projection
@@ -233,7 +252,11 @@ R_TP <- (dot(t(R),q_bar)/dot(q_bar,q_bar))
 Candidates <- as.data.frame(R_TP[order(R_TP, decreasing = TRUE)])
 ```
 
-### 2.3.4 Lineplot the components
+```{r}
+dim(R)
+```
+
+### 2.3.5 Lineplot the components
 
 ```{r}
 # Create color list of top20:
@@ -256,7 +279,7 @@ R_new$group <- cols
 
 # Same function as depreciated `tidyverse::melt()`:
 R_new <- R_new |> rownames_to_column() |> 
-  pivot_longer(cols="Comp 1":"Comp 5", names_to = "component")
+  pivot_longer(cols="Comp 1":"Comp 3", names_to = "component")
 
 ggplot(R_new, aes(group=rowname)) + 
   ylab("Residual") +
@@ -291,24 +314,28 @@ resids_t <- t(resids)
 found %in% rownames(resids_t)
 ```
 
-### 2.3.5 Plot example genes
+### 2.3.6 Plot example genes
 
 ```{r}
 library(scales)
-name1 <- rownames(Candidates)[2]
+name1 <- rownames(Candidates)[4]
 name2 <- found[2]
-
-# Corrected counts (residuals)
-df1 <- data.frame(gene1=resids_t[name1, ], 
-                  gene2=resids_t[name2, ], 
-                  Celltype = meta.sub$SCINA)
-cor1 <- round(cor(df1$gene1, df1$gene2),2)
 
 # Normalized + transformed counts:
 df2 <- data.frame(gene1=counts.sub[name1, ], 
                   gene2=counts.sub[name2, ], 
                   Celltype = meta.sub$SCINA)
+zero_filter <- df2$gene1 > 0 & df2$gene2 >0
+df2 <- df2[zero_filter,]
 cor2 <- round(cor(df2$gene1, df2$gene2),2)
+
+
+# Corrected counts (residuals)
+df1 <- data.frame(gene1=resids_t[name1, ], 
+                  gene2=resids_t[name2, ], 
+                  Celltype = meta.sub$SCINA)
+df1 <- df1[zero_filter,]
+cor1 <- round(cor(df1$gene1, df1$gene2),2)
 
 
 # P1
@@ -329,6 +356,27 @@ p2 <- ggplot(data=df2, aes(gene1, gene2)) +
 
 
 p1+p2
+```
+
+```{r, fig.width=10, fig.height=6}
+top10 <- head(rownames(Candidates), 10)
+bot10 <- tail(rownames(Candidates), 10)
+d <- counts.sub[c(found, top10, bot10), ]
+
+heatmap.2(d, RowSideColors = c(rep("blue", length(found)), rep("green", 10), rep("red", 10)), 
+          trace="none", 
+          density.info="none",
+          margins =c(8,20))
+
+legend("topright", 
+       legend=c("Baits", "Top10", "Bottom10"), 
+       col=c("blue", "green", "red"), 
+       lty=1, lwd=10)
+```
+
+```{r}
+print(name1)
+print(name2)
 ```
 
 # 3 MASCARA on strigolactone genes

@@ -111,9 +111,8 @@ seurat_obj <- MetacellsByGroups(
   group.by = c("SCINA"), # specify the columns in seurat_obj@meta.data to group by
   reduction = 'pca', # select the dimensionality reduction to perform KNN on
   k = 25, # nearest-neighbors parameter
-  max_shared = 15, # maximum number of shared cells between two metacells
-  ident.group = 'SCINA', # set the Idents of the metacell seurat object
-  min_cells=100, # default
+  max_shared = 10, # maximum number of shared cells between two metacells
+  ident.group = 'SCINA' # set the Idents of the metacell seurat object
 )
 
 # normalize metacell expression matrix:
@@ -144,30 +143,19 @@ cat("SUM:", sum(table(gsub("_\\d+$", "", cells_merged$ind))), "\n")
 ```
 
 ```{r}
-pbmc_unmerged <- pbmc[,cells_merged$values]
-pbmc_unmerged
+cells_merged
+```
+
+Based on new cluster identifier append new factor:
+
+```{r}
+pbmc_df <- data.frame(cellnames=colnames(pbmc))
+pbmc_df2 <- merge(pbmc_df, cells_merged, all.x = TRUE, by.x="cellnames", by.y="values")
+pbmc_df2
 ```
 
 ```{r}
-a <- merge(colnames(pbmc_unmerged), cells_merged, all.x = TRUE, by.x="x", by.y="values")
-```
-
-```{r}
-pbmc_unmerged$unmerged_celltype <- as.character(a$ind)
-head(pbmc_unmerged$unmerged_celltype)
-```
-
-```{r}
-counts <- GetAssayData(pbmc_unmerged)
-dim(counts)
-
-```
-
-```{r}
-meta <- data.frame(unmerged_celltype=gsub("_\\d+$", "", pbmc_unmerged$unmerged_celltype),
-                   merged_celltype = pbmc_unmerged$unmerged_celltype)
-as.data.frame(table(meta$unmerged_celltype))
-meta
+pbmc$new_celltypes <- pbmc_df2$ind
 ```
 
 ### 2.2.3 Selection of expressed cells
@@ -176,15 +164,19 @@ meta
 fig2e_genes <- c("Solyc05g051550","Solyc09g083050","Solyc03g005320","Solyc01g094750","Solyc02g014730","Solyc01g095750","Solyc01g094700","Solyc04g011600","Solyc06g074390","Solyc11g067180","Solyc03g097500","Solyc05g054890","Solyc09g065420","Solyc03g115960")
 found <- c()
 for(bait in fig2e_genes){
-  found <- c(found, rownames(pbmc_unmerged)[grep(bait, rownames(pbmc_unmerged))])
+  found <- c(found, rownames(pbmc)[grep(bait, rownames(pbmc))])
 }
 # Select suberin genes and calculate the sum of the expression
 # if that sum is > 1: keep
-expr <- GetAssayData(pbmc_unmerged)
+expr <- GetAssayData(pbmc)
 suberin_expression_cells <- colSums(expr[rownames(expr) %in% found,]) > 1
 
-pbmc_suberin <- pbmc_unmerged[,suberin_expression_cells]
+pbmc_suberin <- pbmc[,suberin_expression_cells]
 table(suberin_expression_cells)
+```
+
+```{r}
+
 ```
 
 ```{r}
@@ -203,10 +195,6 @@ cat("Cells: ", dim(counts.sub)[2], "\n")
 cat("Genes: ", dim(counts.sub)[1], "\n")
 ```
 
-```{r}
-pbmc_suberin@meta.data
-```
-
 ## 2.3 MASCARA
 
 ```{r}
@@ -214,22 +202,49 @@ dim(GetAssayData(pbmc_suberin))
 ```
 
 ```{r}
-meta.sub <- pbmc_suberin@meta.data
-meta <- data.frame(SCINA=meta.sub$SCINA)
-meta
-```
-
-```{r}
-as.data.frame(table(meta$SCINA)) |> ggplot() + 
+as.data.frame(table(pbmc$new_celltypes)) |> ggplot() + 
   geom_col(aes(y=Var1, x=Freq)) + 
   xlab("Meta cell count") + 
   ylab("Celltype")
 ```
 
+```{r}
+table(pbmc$new_celltypes)
+```
+
 ### 2.3.1 ASCA
 
 ```{r}
-ar <- ASCA_decompose(d = meta, x = t(counts.sub), f = "SCINA")
+meta <- data.frame(new_celltypes=as.character(pbmc_suberin$new_celltypes)) 
+table(gsub("_\\d+$", "", as.character(meta$new_celltypes)))
+
+```
+
+```{r}
+meta$new_celltypes[is.na(meta$new_celltypes)] <- "unknown"
+```
+
+```{r}
+dim(counts.sub)
+dim(meta)
+```
+
+```{r}
+to_select <- c(grep("unknown", meta$new_celltypes, invert = TRUE))
+counts.sub2 <- counts.sub[,to_select]
+meta2 <- data.frame(new_celltypes=meta[to_select,])
+```
+
+```{r}
+dim(counts.sub2)
+```
+
+```{r}
+meta2
+```
+
+```{r}
+ar <- ASCA_decompose(d = meta2, x = t(counts.sub2), f = "new_celltypes")
 resids <- ar$residuals
 ```
 
@@ -258,13 +273,32 @@ ggplot(data=melted_cormat, aes(x=Var1, y=Var2, fill=value)) +
 
 ```
 
+```{r}
+
+X <- resids[,-which(colnames(resids) %in% found[1:4])]
+y <- resids[,which(colnames(resids) %in% found[1:4])]
+
+ncomp <- 10
+nrep  <- 5
+result <- data.frame(comp=1:ncomp)
+for(i in c(1:nrep)){
+  index <- sample(1:ncol(X), as.integer(ncol(X)*0.8))
+  X_small <- X[,index]
+  fit <- simpls.fit(X_small, y, ncomp = ncomp)
+  result[paste0("rep", i)] <- fit$Xvar/fit$Xtotvar
+}
+
+result_melt <- result |> pivot_longer(cols="rep1" : "rep5")
+ggplot(data=result_melt, mapping=aes(x=comp, y=value)) + geom_point() + geom_smooth() + geom_jitter() + xlab("Component") + ylab("Fraction explained variance") + scale_x_continuous(breaks=c(1:ncomp))
+```
+
 ### 2.3.3 PLS + Candidates
 
 ```{r}
 library(pls)
 X <- resids[,-which(colnames(resids) %in% found[1:4])]
 y <- resids[,which(colnames(resids) %in% found[1:4])]
-spls_res <- simpls.fit(X, y, ncomp = 5)
+spls_res <- simpls.fit(X, y, ncomp = 4)
 
 q_bar <- colMeans(spls_res$Yloadings)
 R <- spls_res$projection
@@ -296,7 +330,7 @@ R_new$group <- cols
 
 # Same function as depreciated `tidyverse::melt()`:
 R_new <- R_new |> rownames_to_column() |> 
-  pivot_longer(cols="Comp 1":"Comp 5", names_to = "component")
+  pivot_longer(cols="Comp 1":"Comp 4", names_to = "component")
 
 ggplot(R_new, aes(group=rowname)) + 
   ylab("Residual") +
@@ -335,19 +369,21 @@ found %in% rownames(resids_t)
 
 ```{r}
 library(scales)
-name1 <- rownames(Candidates)[2]
-name2 <- found[2]
+# name1 <- rownames(Candidates)[2]
+# name2 <- found[2]
+name1 <- "gene:Solyc03g097500.3"
+name2 <- "gene:Solyc09g083050.3"
 
 # Corrected counts (residuals)
 df1 <- data.frame(gene1=resids_t[name1, ], 
                   gene2=resids_t[name2, ], 
-                  Celltype = meta.sub$SCINA)
+                  Celltype = meta2$new_celltypes)
 cor1 <- round(cor(df1$gene1, df1$gene2),2)
 
 # Normalized + transformed counts:
 df2 <- data.frame(gene1=counts.sub[name1, ], 
                   gene2=counts.sub[name2, ], 
-                  Celltype = meta.sub$SCINA)
+                  Celltype = meta$new_celltypes)
 cor2 <- round(cor(df2$gene1, df2$gene2),2)
 
 

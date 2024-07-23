@@ -382,11 +382,17 @@ cells_merged
 ```
 
 ```{r}
+length(unique(cells_merged$values))
+```
+
+```{r}
 pbmc_unmerged <- pbmc[,cells_merged$values]
 pbmc_unmerged
 ```
 
 ```{r}
+# Left join the cellnames of the big matrix and the de-convoluted 'cells_merged'
+# object
 a <- merge(colnames(pbmc_unmerged), cells_merged, all.x = TRUE, by.x="x", by.y="values")
 ```
 

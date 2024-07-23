@@ -131,8 +131,27 @@ From here we take the residuals and calculate a PLS2 model with a predefined set
 ```{r}
 
 spls_res <- simpls.fit(resids[,-which(colnames(resids) %in% baits)],
-                          resids[,which(colnames(resids) %in% baits)], ncomp = 2)
+                          resids[,which(colnames(resids) %in% baits)], ncomp = 5)
   
+```
+
+
+```{r}
+X <- resids[,-which(colnames(resids) %in% baits)]
+y <- resids[,which(colnames(resids) %in% baits)]
+
+ncomp <- 10
+nrep  <- 500
+result <- data.frame(comp=1:ncomp)
+for(i in c(1:nrep)){
+  index <- sample(1:ncol(X), as.integer(ncol(X)*0.8))
+  X_small <- X[,index]
+  fit <- simpls.fit(X_small, y, ncomp = ncomp)
+  result[paste0("rep", i)] <- fit$Xvar/fit$Xtotvar
+}
+
+result_melt <- result |> pivot_longer(cols="rep1" : "rep5")
+ggplot(data=result_melt, mapping=aes(x=comp, y=value)) + geom_point() + geom_smooth() + geom_jitter() + xlab("Component") + ylab("Fraction explained variance")
 ```
 
 ## 3.4 Select features
