@@ -68,7 +68,7 @@ pbmc <- subset(pbmc, subset = nFeature_RNA > 300 & nFeature_RNA < 9000 & percent
 pbmc
 ```
 ```{r}
-protoplast <- as.list(read.csv("protoplast_induced_genes.txt", header=FALSE))$V1
+protoplast <- as.list(read.csv("data/protoplast_induced_genes.txt", header=FALSE))$V1
 protoplast <- gsub(pattern="\\.[0-9]+", "", protoplast)
 
 rownames2 <- gsub(pattern="\\.[0-9]+", "", rownames(pbmc))
@@ -80,6 +80,9 @@ to_keep <- !(rownames2 %in% protoplast)
 pbmc <- pbmc[to_keep,]
 
 table(to_keep)
+```
+```{r}
+ncol(pbmc)
 ```
 
 

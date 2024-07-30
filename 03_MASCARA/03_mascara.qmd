@@ -63,6 +63,58 @@ table(pbmc@meta.data$SCINA)
 
 # 2. Summary statistics
 
+```{r}
+pbmc@meta.data$SCINA[pbmc@meta.data$SCINA == "unknown"] <- "Unknown"
+lvls <- unique(c(pbmc@meta.data$sctype_classification, 
+         pbmc@meta.data$SCINA,
+         pbmc@meta.data$chisquare,
+         pbmc@meta.data$scsorter))
+
+
+pbmc@meta.data[,9:13] <- lapply(pbmc@meta.data[,9:13], factor, levels=lvls)
+```
+
+```{r}
+Idents(pbmc) <- "seurat_clusters"
+pbmc.sub <- pbmc[, pbmc@meta.data$seurat_clusters != "Unknown"]
+p1 <- DimPlot(pbmc.sub) + ggtitle("Seurat")
+
+Idents(pbmc) <- "chisquare"
+pbmc.sub <- pbmc[, pbmc@meta.data$chisquare != "Unknown"]
+p2 <- DimPlot(pbmc.sub) + ggtitle("chisquare")
+
+Idents(pbmc) <- "scsorter"
+pbmc.sub <- pbmc[, pbmc@meta.data$scsorter != "Unknown"]
+p3 <- DimPlot(pbmc.sub) + ggtitle("scsorter")
+
+Idents(pbmc) <- "SCINA"
+pbmc.sub <- pbmc[, pbmc@meta.data$SCINA != "Unknown"]
+p4 <- DimPlot(pbmc.sub) + ggtitle("SCINA")
+
+(p1+p2) / (p3+p4) + plot_annotation(tag_levels = 'a')
+```
+
+```{r}
+ElbowPlot(pbmc, ndims = 50) + geom_vline(xintercept = 15, col="red")
+```
+
+```{r}
+a <- pbmc@meta.data[,c("chisquare","scsorter", "SCINA")] |> pivot_longer(cols = c("chisquare","scsorter", "SCINA"), names_to="method", values_to = "value")
+
+ggplot(a, aes(y=value)) + geom_bar(aes(fill=method), position="dodge") 
+
+```
+
+```{r}
+meta <- pbmc@meta.data[,c("chisquare","scsorter", "SCINA")] 
+meta2 <- meta |> pivot_longer(cols = c("chisquare","scsorter", "SCINA"), names_to="method", values_to = "value") 
+meta2 <- meta2[meta2['value'] != "Unknown",]
+
+meta2 <- meta2 |> group_by(method, value) |> summarise(count=n()) |> mutate(perc=count/sum(count)*100)
+meta2 |> ggplot() + geom_col(aes(y=value, x=perc, fill=method), position="dodge") + xlab("Percentage") + ylab("Cell type")
+
+```
+
 ## 2.1 Dotplots
 
 To make sure we loaded the right data
@@ -341,8 +393,8 @@ p2 <- ggplot(data=df2, aes(gene1, gene2)) +
   geom_point(aes(colour=Celltype), alpha = 0.5) + 
   xlab(name1) + 
   ylab(name2) +
-  ggtitle(paste0("Gene expression \ncorr:", cor2))+ 
-  theme(legend.position = "none")
+  ggtitle(paste0("Gene expression \ncorr:", cor2))
+  
 
 
 p1+p2

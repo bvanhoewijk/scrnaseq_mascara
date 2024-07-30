@@ -40,7 +40,7 @@ library(matlib)
 library(truncnorm)
 library(pls)
 library(Seurat)
-
+library(hdWGCNA)
 
 source("code/DATA_SIM_FUNCS.R")
 source("code/MASCARA_FUNCS.R")
@@ -111,7 +111,7 @@ seurat_obj <- MetacellsByGroups(
   group.by = c("SCINA"), # specify the columns in seurat_obj@meta.data to group by
   reduction = 'pca', # select the dimensionality reduction to perform KNN on
   k = 25, # nearest-neighbors parameter
-  max_shared = 10, # maximum number of shared cells between two metacells
+  max_shared = 0, # maximum number of shared cells between two metacells
   ident.group = 'SCINA' # set the Idents of the metacell seurat object
 )
 
@@ -169,7 +169,7 @@ for(bait in fig2e_genes){
 # Select suberin genes and calculate the sum of the expression
 # if that sum is > 1: keep
 expr <- GetAssayData(pbmc)
-suberin_expression_cells <- colSums(expr[rownames(expr) %in% found,]) > 1
+suberin_expression_cells <- colSums(expr[rownames(expr) %in% found,]) > 0
 
 pbmc_suberin <- pbmc[,suberin_expression_cells]
 table(suberin_expression_cells)
@@ -249,7 +249,7 @@ resids <- ar$residuals
 ```
 
 ```{r}
-hist(resids)
+hist(resids, main="Histogram of residuals")
 ```
 
 ### 2.3.2 Correl plot
@@ -368,6 +368,11 @@ found %in% rownames(resids_t)
 ### 2.3.5 Plot example genes
 
 ```{r}
+meta2$colors <- gsub("_\\d+$", "", meta2$new_celltypes)
+meta$colors <- gsub("_\\d+$", "", meta$new_celltypes)
+```
+
+```{r, fig.width=8}
 library(scales)
 # name1 <- rownames(Candidates)[2]
 # name2 <- found[2]
@@ -377,13 +382,13 @@ name2 <- "gene:Solyc09g083050.3"
 # Corrected counts (residuals)
 df1 <- data.frame(gene1=resids_t[name1, ], 
                   gene2=resids_t[name2, ], 
-                  Celltype = meta2$new_celltypes)
+                  Celltype = meta2$colors)
 cor1 <- round(cor(df1$gene1, df1$gene2),2)
 
 # Normalized + transformed counts:
 df2 <- data.frame(gene1=counts.sub[name1, ], 
                   gene2=counts.sub[name2, ], 
-                  Celltype = meta$new_celltypes)
+                  Celltype = meta$colors)
 cor2 <- round(cor(df2$gene1, df2$gene2),2)
 
 
@@ -392,16 +397,54 @@ p1 <- ggplot(data=df1, aes(gene1, gene2)) +
   geom_point(aes(colour=Celltype), alpha = 0.5) + 
   xlab(paste0("Bait: ", name1)) +
   ylab(paste0("Candidate: ", name2)) +
-  ggtitle(paste0("Residuals of gene expression\ncorr:", cor1)) + 
-  theme(legend.position = "none")
+  ggtitle(paste0("Residuals of gene expression\ncorr:", cor1))
+  # + theme(legend.position = "none")
 
 # P2
 p2 <- ggplot(data=df2, aes(gene1, gene2)) + 
   geom_point(aes(colour=Celltype), alpha = 0.5) + 
   xlab(paste0("Bait: ", name1)) +
   ylab(paste0("Candidate: ", name2)) +
-  ggtitle(paste0("Gene expression \ncorr:", cor2))+ 
-  theme(legend.position = "none")
+  ggtitle(paste0("Gene expression \ncorr:", cor2)) 
+# + theme(legend.position = "none")
+
+
+p1+p2
+```
+
+```{r, fig.width=8}
+library(scales)
+name1 <- rownames(Candidates)[2]
+name2 <- found[2]
+
+# Corrected counts (residuals)
+df1 <- data.frame(gene1=resids_t[name1, ], 
+                  gene2=resids_t[name2, ], 
+                  Celltype = meta2$colors)
+cor1 <- round(cor(df1$gene1, df1$gene2),2)
+
+# Normalized + transformed counts:
+df2 <- data.frame(gene1=counts.sub[name1, ], 
+                  gene2=counts.sub[name2, ], 
+                  Celltype = meta$colors)
+cor2 <- round(cor(df2$gene1, df2$gene2),2)
+
+
+# P1
+p1 <- ggplot(data=df1, aes(gene1, gene2)) + 
+  geom_point(aes(colour=Celltype), alpha = 0.5) + 
+  xlab(paste0("Bait: ", name1)) +
+  ylab(paste0("Candidate: ", name2)) +
+  ggtitle(paste0("Residuals of gene expression\ncorr:", cor1))
+  # + theme(legend.position = "none")
+
+# P2
+p2 <- ggplot(data=df2, aes(gene1, gene2)) + 
+  geom_point(aes(colour=Celltype), alpha = 0.5) + 
+  xlab(paste0("Bait: ", name1)) +
+  ylab(paste0("Candidate: ", name2)) +
+  ggtitle(paste0("Gene expression \ncorr:", cor2)) 
+# + theme(legend.position = "none")
 
 
 p1+p2

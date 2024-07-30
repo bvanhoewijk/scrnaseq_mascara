@@ -12,7 +12,8 @@ library(dplyr)
 library(Seurat)
 library(patchwork)
 
-dirs <- setNames(c("../02_scRNA_analysis/data/run_count_rep1/outs/filtered_feature_bc_matrix/", "../02_scRNA_analysis/data/run_count_rep1/outs/filtered_feature_bc_matrix/"), c("rep1", "rep2"))
+dirs <- setNames(c("../02_scRNA_analysis/data/run_count_rep1/outs/filtered_feature_bc_matrix/", 
+                   "../02_scRNA_analysis/data/run_count_rep2/outs/filtered_feature_bc_matrix/"), c("rep1", "rep2"))
 
 # Load the PBMC dataset
 pbmc.data <- Read10X(data.dir = dirs)
@@ -64,7 +65,7 @@ This function calls sctransform::vst. The sctransform package is available at ht
 
 
 ```{r}
-pbmc <- subset(pbmc, subset = nFeature_RNA > 300 & nFeature_RNA < 9000 & percent.MT < 2)
+pbmc <- subset(pbmc, subset = nFeature_RNA > 300 & nFeature_RNA < 9000 & percent.MT < 1)
 pbmc
 ```
 ```{r}
@@ -96,7 +97,7 @@ found
 # Select strigolactone_genes genes and calculate the sum of the expression
 # if that sum is > 1: keep
 expr <- GetAssayData(pbmc)
-strigolactone_expression_cells <- colSums(expr[rownames(expr) %in% found,]) > 1
+strigolactone_expression_cells <- colSums(expr[rownames(expr) %in% found,]) > 0
 
 pbmc_selection <- pbmc[,strigolactone_expression_cells]
 table(strigolactone_expression_cells)
@@ -258,12 +259,12 @@ DimPlot(pbmc_selection, reduction = "umap", label=TRUE) + xlim(-14, 14) + ylim(-
 ```
 ```{r}
 found <- c()
-Idents(pbmc) <- "chisquare"
+Idents(pbmc_selection) <- "chisquare"
 for(bait in strigolactone_genes){
-  found <- c(found, rownames(pbmc)[grep(bait, rownames(pbmc))])
+  found <- c(found, rownames(pbmc_selection)[grep(bait, rownames(pbmc_selection))])
   
 }
-p <- DotPlot(pbmc, features=found) + RotatedAxis() + coord_flip() + ggtitle("Chi-Square")
+p <- DotPlot(pbmc_selection, features=found) + RotatedAxis() + coord_flip() + ggtitle("Chi-Square")
 p 
 ```
 
@@ -294,18 +295,7 @@ expr_mat <- as.matrix(expr)
 marker_gene_expression <- expr_mat[rownames(expr_mat) %in% signatures$Marker,]
 dim(marker_gene_expression)
 ```
-```{r}
-# Percentage:
-cutoff <- 1
 
-# Genes with more than 0 count per cell
-a <- rowSums(apply(marker_gene_expression, 2, function(x) {x > 0})) / ncol(marker_gene_expression) * 100
-title <- paste0(">",cutoff,"% of cells has gene expressed\n with gene count >0 (", length(a[a>cutoff]),"/",length(signatures$Marker), ")")
-
-
-sel <- names(a[a > cutoff])
-length(sel)
-```
 
 
 
@@ -349,9 +339,7 @@ for(type in unique(signatures[["Type"]])){
     selection <- signatures$Marker[signatures["Type"] == type]
     # Anyway expressed
     selection <- selection[selection %in% rownames(expr_mat)]
-    # Occurance filter
-    selection <- selection[selection %in% sel]
-    anno[[type]] <- head(selection, 25)
+    anno[[type]] <- selection
 }
 
 ```
@@ -443,7 +431,7 @@ DimPlot(pbmc_selection, reduction = "umap", label = TRUE, repel = TRUE, group.by
 Idents(pbmc_selection) <- "sctype_classification"
 found <- c()
 for(bait in strigolactone_genes){
-  found <- c(found, rownames(pbmc)[grep(bait, rownames(pbmc))])
+  found <- c(found, rownames(pbmc_selection)[grep(bait, rownames(pbmc_selection))])
   
 }
 p <- DotPlot(pbmc_selection, features=found, scale=TRUE,) + RotatedAxis() + coord_flip() + ggtitle("scType")
@@ -503,7 +491,7 @@ DimPlot(pbmc_selection, reduction = "umap", label = TRUE, repel = TRUE, group.by
 Idents(pbmc_selection) <- "SCINA"
 found <- c()
 for(bait in strigolactone_genes){
-  found <- c(found, rownames(pbmc)[grep(bait, rownames(pbmc))])
+  found <- c(found, rownames(pbmc_selection)[grep(bait, rownames(pbmc_selection))])
   
 }
 p <- DotPlot(pbmc_selection, features=found, scale=TRUE,) + RotatedAxis() + coord_flip() + ggtitle("SCINA")
@@ -516,7 +504,7 @@ p
 fig2e_genes <- c("Solyc05g051550","Solyc09g083050","Solyc03g005320","Solyc01g094750","Solyc02g014730","Solyc01g095750","Solyc01g094700","Solyc04g011600","Solyc06g074390","Solyc11g067180","Solyc03g097500","Solyc05g054890","Solyc09g065420","Solyc03g115960")
 found <- c()
 for(bait in strigolactone_genes){
-  found <- c(found, rownames(pbmc)[grep(bait, rownames(pbmc))])
+  found <- c(found, rownames(pbmc_selection)[grep(bait, rownames(pbmc_selection))])
   
 }
 for(item in c("chisquare", "sctype_classification", "SCINA")){
@@ -551,12 +539,51 @@ found <- found[found %in% colnames(resids)]
 found
 ```
 
+
 ```{r}
 cormat <- cor(resids[,which(colnames(resids) %in% found)])
 
 melted_cormat <- melt(cormat)
 
-ggplot(data=melted_cormat, aes(x=Var1, y=Var2, fill=value)) + 
+cor1 <- ggplot(data=melted_cormat, aes(x=Var1, y=Var2, fill=value)) + 
+  geom_tile() + 
+  xlab("") +
+  ylab("") +
+  geom_text(aes(label=round(value, 2)), color="white") +
+  scale_fill_gradient2(low = "#075AFF",
+                       mid = "#FFFFCC",
+                       high = "#FF0000",
+                       breaks=c(-1, 0, 1),
+                       limits=c(-1,1)) +
+  theme(axis.text.x = element_text(angle=90, vjust=.5, hjust=1)) + ggtitle("Residuals")
+
+
+counts.sub.t <- t(counts.sub)
+cormat <- cor(counts.sub.t[,which(colnames(counts.sub.t) %in% found)])
+
+melted_cormat <- melt(cormat)
+
+cor2 <- ggplot(data=melted_cormat, aes(x=Var1, y=Var2, fill=value)) + 
+  geom_tile() + 
+  xlab("") +
+  ylab("") +
+  geom_text(aes(label=round(value, 2)), color="white") +
+  scale_fill_gradient2(low = "#075AFF",
+                       mid = "#FFFFCC",
+                       high = "#FF0000",
+                       breaks=c(-1, 0, 1),
+                       limits=c(-1,1)) +
+  theme(axis.text.x = element_text(angle=90, vjust=.5, hjust=1))  + ggtitle("Gene expression")
+
+cor1 | cor2
+```
+```{r}
+counts.sub.t <- t(counts.sub)
+cormat <- cor(counts.sub.t[,which(colnames(counts.sub.t) %in% found)])
+
+melted_cormat <- melt(cormat)
+
+cor1 <- ggplot(data=melted_cormat, aes(x=Var1, y=Var2, fill=value)) + 
   geom_tile() + 
   xlab("") +
   ylab("") +
@@ -568,22 +595,58 @@ ggplot(data=melted_cormat, aes(x=Var1, y=Var2, fill=value)) +
                        limits=c(-1,1)) +
   theme(axis.text.x = element_text(angle=90, vjust=.5, hjust=1))
 ```
+
 ```{r}
-counts.sub.t <- t(counts.sub)
-cormat <- cor(counts.sub.t[,which(colnames(counts.sub.t) %in% found)])
+library(pls)
+library(pracma)
 
-melted_cormat <- melt(cormat)
+X <- resids[,-which(colnames(resids) %in% found[1:4])]
+y <- resids[,which(colnames(resids) %in% found[1:4])]
+spls_res <- simpls.fit(X, y, ncomp = 5)
 
-ggplot(data=melted_cormat, aes(x=Var1, y=Var2, fill=value)) + 
-  geom_tile() + 
-  xlab("") +
-  ylab("") +
-  geom_text(aes(label=round(value, 2)), color="white") +
-  scale_fill_gradient2(low = "#075AFF",
-                       mid = "#FFFFCC",
-                       high = "#FF0000",
-                       breaks=c(-1, 0, 1),
-                       limits=c(-1,1)) +
-  theme(axis.text.x = element_text(angle=90, vjust=.5, hjust=1))
+q_bar <- colMeans(spls_res$Yloadings)
+R <- spls_res$projection
+R_TP <- (dot(t(R),q_bar)/dot(q_bar,q_bar))
+  
+Candidates <- as.data.frame(R_TP[order(R_TP, decreasing = TRUE)])
+```
+
+
+```{r}
+name1 <- rownames(Candidates)[1]
+name2 <- found[1]
+
+# Corrected counts (residuals)
+resids_t <- t(resids)
+df1 <- data.frame(gene1=resids_t[name1, ], 
+                  gene2=resids_t[name2, ], 
+                  Celltype = meta.sub$SCINA)
+cor1 <- round(cor(df1$gene1, df1$gene2),2)
+
+# Normalized + transformed counts:
+df2 <- data.frame(gene1=counts.sub[name1, ], 
+                  gene2=counts.sub[name2, ], 
+                  Celltype = meta.sub$SCINA)
+cor2 <- round(cor(df2$gene1, df2$gene2),2)
+
+
+# P1
+p1 <- ggplot(data=df1, aes(gene1, gene2)) + 
+  geom_point(aes(colour=Celltype), alpha = 0.5) + 
+  xlab(paste0("Bait: ", name1)) +
+  ylab(paste0("Candidate: ", name2)) +
+  ggtitle(paste0("Residuals of gene expression\ncorr:", cor1)) + 
+  theme(legend.position = "none")
+
+# P2
+p2 <- ggplot(data=df2, aes(gene1, gene2)) + 
+  geom_point(aes(colour=Celltype), alpha = 0.5) + 
+  xlab(paste0("Bait: ", name1)) +
+  ylab(paste0("Candidate: ", name2)) +
+  ggtitle(paste0("Gene expression \ncorr:", cor2))+ 
+  theme(legend.position = "none")
+
+
+p1+p2
 ```
 

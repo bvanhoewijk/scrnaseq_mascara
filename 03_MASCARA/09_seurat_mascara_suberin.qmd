@@ -12,7 +12,9 @@ library(dplyr)
 library(Seurat)
 library(patchwork)
 
-dirs <- setNames(c("../02_scRNA_analysis/data/run_count_rep1/outs/filtered_feature_bc_matrix/", "../02_scRNA_analysis/data/run_count_rep1/outs/filtered_feature_bc_matrix/"), c("rep1", "rep2"))
+dirs <- setNames(c("../02_scRNA_analysis/data/run_count_rep1/outs/filtered_feature_bc_matrix/", 
+                   "../02_scRNA_analysis/data/run_count_rep2/outs/filtered_feature_bc_matrix/"), 
+                 c("rep1", "rep2"))
 
 # Load the PBMC dataset
 pbmc.data <- Read10X(data.dir = dirs)
@@ -55,6 +57,34 @@ VlnPlot(pbmc, features = c("nFeature_RNA", "nCount_RNA", "percent.MT"), ncol = 3
 ```
 
 ```{r}
+table(pbmc$orig.ident)
+```
+
+
+```{r}
+library(ggplot2)
+rep1 <- subset(pbmc, orig.ident == "rep1")@meta.data
+title1 <- paste0("Rep1: ", round(cor(rep1$nCount_RNA, rep1$percent.MT), 1))
+rep2 <- subset(pbmc, orig.ident == "rep2")@meta.data
+title2 <- paste0("Rep2: ", round(cor(rep2$nCount_RNA, rep2$percent.MT), 1))
+
+p1 <- ggplot(data=rep1, aes(x=nCount_RNA, y=percent.MT)) + 
+  geom_point() + 
+  ggtitle(title1) +
+  xlim(c(NA, max(rep1$nCount_RNA, rep2$nCount_RNA))) +
+  ylim(c(NA, max(rep1$percent.MT, rep2$percent.MT)))
+
+
+p2 <- ggplot(data=rep2, aes(x=nCount_RNA, y=percent.MT)) + 
+  geom_point() + 
+  ggtitle(title2) + 
+  xlim(NA, max(rep1$nCount_RNA, rep2$nCount_RNA)) +
+  ylim(NA, max(rep1$percent.MT, rep2$percent.MT))
+
+p1 | p2
+```
+
+```{r}
 plot1 <- FeatureScatter(pbmc, feature1 = "nCount_RNA", feature2 = "percent.MT")
 plot2 <- FeatureScatter(pbmc, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
 plot1 + plot2
@@ -64,7 +94,7 @@ This function calls sctransform::vst. The sctransform package is available at ht
 
 
 ```{r}
-pbmc <- subset(pbmc, subset = nFeature_RNA > 300 & nFeature_RNA < 9000 & percent.MT < 20)
+pbmc <- subset(pbmc, subset = nFeature_RNA > 300 & nFeature_RNA < 9000 & percent.MT < 1)
 pbmc
 ```
 ```{r}
@@ -96,9 +126,9 @@ found
 # Select suberin genes and calculate the sum of the expression
 # if that sum is > 1: keep
 expr <- GetAssayData(pbmc)
-suberin_expression_cells <- colSums(expr[rownames(expr) %in% found,]) > 1
+suberin_expression_cells <- colSums(expr[rownames(expr) %in% found,]) > 0
 
-pbmc_selection <- pbmc#pbmc[,suberin_expression_cells]
+pbmc_selection <- pbmc[,suberin_expression_cells]
 table(suberin_expression_cells)
 ```
 
@@ -114,13 +144,16 @@ VlnPlot(pbmc_selection, features = c("nFeature_RNA", "nCount_RNA", "percent.MT",
 - We utilize an improved parameter estimation procedure that alleviates uncertainty and bias that result from fitting GLM models for very lowly expressed genes.
 - We place a lower bound on gene-level standard deviation when calculating Pearson residuals. This prevents genes with extremely low expression (only 1-2 detected UMIs) from having a high pearson residual.
 ```{r}
-# Remove the MT genes prior to normalizing.
-# Vector with percent.MT is still kept for transformation
-non_mt_genes <- grep("^MT", rownames(pbmc_selection), invert=TRUE)
-pbmc_selection <- pbmc_selection[non_mt_genes,]
-
 # Normalizes, Scales and finds variable features
-pbmc_selection <- SCTransform(pbmc_selection, verbose=FALSE, vars.to.regress = c("percent.MT"), return.only.var.genes=FALSE, vst.flavor = "v2")
+pbmc_selection <- SCTransform(pbmc_selection, 
+                              verbose=FALSE, 
+                              vars.to.regress = c("percent.MT"), 
+                              return.only.var.genes=FALSE, 
+                              vst.flavor = "v2")
+
+# Vector with percent.MT is still kept for transformation
+# non_mt_genes <- grep("^MT", rownames(pbmc_selection), invert=TRUE)
+# pbmc_selection <- pbmc_selection[non_mt_genes,]
 ```
 
 
@@ -258,12 +291,12 @@ DimPlot(pbmc_selection, reduction = "umap", label=TRUE) + xlim(-14, 14) + ylim(-
 ```
 ```{r}
 found <- c()
-Idents(pbmc) <- "chisquare"
+Idents(pbmc_selection) <- "chisquare"
 for(bait in suberin_genes){
-  found <- c(found, rownames(pbmc)[grep(bait, rownames(pbmc))])
+  found <- c(found, rownames(pbmc_selection)[grep(bait, rownames(pbmc_selection))])
   
 }
-p <- DotPlot(pbmc, features=found) + RotatedAxis() + coord_flip() + ggtitle("Chi-Square")
+p <- DotPlot(pbmc_selection, features=found) + RotatedAxis() + coord_flip() + ggtitle("Chi-Square")
 p 
 ```
 
@@ -496,9 +529,7 @@ DimPlot(pbmc.sub, reduction = "umap", label = TRUE, repel = TRUE, group.by = 'SC
 ```
 
 
-```{r}
-DimPlot(pbmc_selection, reduction = "umap", label = TRUE, repel = TRUE, group.by = 'SCINA')  
-```
+
 ```{r}
 fig2e_genes <- c("Solyc05g051550","Solyc09g083050","Solyc03g005320","Solyc01g094750","Solyc02g014730","Solyc01g095750","Solyc01g094700","Solyc04g011600","Solyc06g074390","Solyc11g067180","Solyc03g097500","Solyc05g054890","Solyc09g065420","Solyc03g115960")
 Idents(pbmc_selection) <- "SCINA"
@@ -541,6 +572,8 @@ as.data.frame(table(meta$sctype)) |> ggplot() +
   ylab("Celltype")
 ```
 ```{r}
+source("code/MASCARA_FUNCS.R")
+library(gASCA)
 counts.sub <- as.matrix(GetAssayData(pbmc_selection))
 ar <- ASCA_decompose(d = meta, x = t(counts.sub), f = "sctype")
 resids <- ar$residuals
@@ -551,7 +584,9 @@ found <- found[found %in% colnames(resids)]
 found
 ```
 
+
 ```{r}
+library(reshape2)
 cormat <- cor(resids[,which(colnames(resids) %in% found[1:4])])
 
 melted_cormat <- melt(cormat)
@@ -592,8 +627,10 @@ ggplot(data=melted_cormat, aes(x=Var1, y=Var2, fill=value)) +
 X <- resids[,-which(colnames(resids) %in% found)]
 y <- resids[,which(colnames(resids) %in% found)]
 
+library(pls)
+
 ncomp <- 10
-nrep  <- 100
+nrep  <- 5
 result <- data.frame(comp=1:ncomp)
 for(i in c(1:nrep)){
   set.seed(i)
@@ -610,5 +647,70 @@ for(i in c(1:nrep)){
 
 result_melt <- result |> pivot_longer(cols="rep1" : paste0("rep",nrep))
 ggplot(data=result_melt, mapping=aes(x=comp, y=value)) + geom_point() + geom_smooth() + geom_jitter() + xlab("Component") + ylab("Fraction explained variance") + scale_x_continuous(breaks=c(1:ncomp))
+```
+```{r}
+library(pls)
+library(pracma)
+
+X <- resids[,-which(colnames(resids) %in% found[1:4])]
+y <- resids[,which(colnames(resids) %in% found[1:4])]
+spls_res <- simpls.fit(X, y, ncomp = 5)
+
+q_bar <- colMeans(spls_res$Yloadings)
+R <- spls_res$projection
+R_TP <- (dot(t(R),q_bar)/dot(q_bar,q_bar))
+  
+Candidates <- as.data.frame(R_TP[order(R_TP, decreasing = TRUE)])
+```
+
+
+```{r}
+library(scales)
+# name1 <- rownames(Candidates)[2]
+# name2 <- found[2]
+name1 <- "gene:Solyc03g097500.3"
+name2 <- "gene:Solyc09g083050.3"
+
+# Corrected counts (residuals)
+resids_t <- t(resids)
+df1 <- data.frame(gene1=resids_t[name1, ], 
+                  gene2=resids_t[name2, ], 
+                  Celltype = meta.sub$SCINA)
+cor1 <- round(cor(df1$gene1, df1$gene2),2)
+
+# Normalized + transformed counts:
+df2 <- data.frame(gene1=counts.sub[name1, ], 
+                  gene2=counts.sub[name2, ], 
+                  Celltype = meta.sub$SCINA)
+cor2 <- round(cor(df2$gene1, df2$gene2),2)
+
+
+# P1
+p1 <- ggplot(data=df1, aes(gene1, gene2)) + 
+  geom_point(aes(colour=Celltype), alpha = 0.5) + 
+  xlab(paste0("Bait: ", name1)) +
+  ylab(paste0("Candidate: ", name2)) +
+  ggtitle(paste0("Residuals of gene expression\ncorr:", cor1)) + 
+  theme(legend.position = "none")
+
+# P2
+p2 <- ggplot(data=df2, aes(gene1, gene2)) + 
+  geom_point(aes(colour=Celltype), alpha = 0.5) + 
+  xlab(paste0("Bait: ", name1)) +
+  ylab(paste0("Candidate: ", name2)) +
+  ggtitle(paste0("Gene expression \ncorr:", cor2))+ 
+  theme(legend.position = "none")
+
+
+p1+p2
+```
+
+```{r}
+print("DONE!!!!")
+Sys.time()
+```
+
+
+```{r}
 ```
 

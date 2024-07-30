@@ -61,6 +61,73 @@ colnames(pbmc@meta.data)
 table(pbmc@meta.data$SCINA)
 ```
 
+```{r}
+pbmc@meta.data$SCINA[pbmc@meta.data$SCINA == "unknown"] <- "Unknown"
+lvls <- unique(c(pbmc@meta.data$sctype_classification, 
+         pbmc@meta.data$SCINA,
+         pbmc@meta.data$chisquare,
+         pbmc@meta.data$scsorter))
+
+
+pbmc@meta.data[,9:13] <- lapply(pbmc@meta.data[,9:13], factor, levels=lvls)
+```
+
+```{r}
+Idents(pbmc) <- "seurat_clusters"
+pbmc.sub <- pbmc[, pbmc@meta.data$seurat_clusters != "Unknown"]
+p1 <- DimPlot(pbmc.sub) + ggtitle("Seurat")
+
+Idents(pbmc) <- "chisquare"
+pbmc.sub <- pbmc[, pbmc@meta.data$chisquare != "Unknown"]
+p2 <- DimPlot(pbmc.sub) + ggtitle("chisquare")
+
+Idents(pbmc) <- "scsorter"
+pbmc.sub <- pbmc[, pbmc@meta.data$scsorter != "Unknown"]
+p3 <- DimPlot(pbmc.sub) + ggtitle("scsorter")
+
+Idents(pbmc) <- "SCINA"
+pbmc.sub <- pbmc[, pbmc@meta.data$SCINA != "Unknown"]
+p4 <- DimPlot(pbmc.sub) + ggtitle("SCINA")
+
+(p1+p2) / (p3+p4) + plot_annotation(tag_levels = 'a')
+```
+
+```{r}
+ElbowPlot(pbmc, ndims = 50) + geom_vline(xintercept = 15, col="red")
+
+```
+
+```{r}
+fig2e_genes <- c("Solyc05g051550","Solyc09g083050","Solyc03g005320","Solyc01g094750","Solyc02g014730","Solyc01g095750","Solyc01g094700","Solyc04g011600","Solyc06g074390","Solyc11g067180","Solyc03g097500","Solyc05g054890","Solyc09g065420","Solyc03g115960")
+found <- c()
+for(bait in fig2e_genes){
+  found <- c(found, rownames(pbmc)[grep(bait, rownames(pbmc))])
+  
+}
+
+Idents(pbmc) <- "seurat_clusters"
+pbmc.sub <- pbmc[, pbmc@meta.data$seurat_clusters != "Unknown"]
+p1 <- DotPlot(pbmc, features=found, scale=TRUE,) + RotatedAxis() + coord_flip() + ggtitle("Seurat")
+
+Idents(pbmc) <- "chisquare"
+pbmc.sub <- pbmc[, pbmc@meta.data$chisquare != "Unknown"]
+p2 <- DotPlot(pbmc, features=found, scale=TRUE,) + RotatedAxis() + coord_flip() + ggtitle("chisquare")
+
+Idents(pbmc) <- "scsorter"
+pbmc.sub <- pbmc[, pbmc@meta.data$scsorter != "Unknown"]
+p3 <- DotPlot(pbmc, features=found, scale=TRUE,) + RotatedAxis() + coord_flip() + ggtitle("scsorter")
+
+Idents(pbmc) <- "SCINA"
+pbmc.sub <- pbmc[, pbmc@meta.data$SCINA != "Unknown"]
+p4 <- DotPlot(pbmc, features=found, scale=TRUE,) + RotatedAxis() + coord_flip() + ggtitle("SCINA")
+
+(p1+p2) / (p3+p4) + plot_annotation(tag_levels = 'a')
+```
+
+```{r}
+p4
+```
+
 # 2 MASCARA on suberin genes
 
 ## 2.1 Summary statistics
@@ -234,7 +301,9 @@ for(i in c(1:nrep)){
 }
 
 result_melt <- result |> pivot_longer(cols="rep1" : "rep5")
-ggplot(data=result_melt, mapping=aes(x=comp, y=value)) + geom_point() + geom_smooth() + geom_jitter() + xlab("Component") + ylab("Fraction explained variance") + scale_x_continuous(breaks=c(1:ncomp))
+elbow_plot <- ggplot(data=result_melt, mapping=aes(x=comp, y=value)) + geom_point() + geom_smooth() + geom_jitter() + xlab("Component") + ylab("Fraction explained variance") + scale_x_continuous(breaks=c(1:ncomp))
+
+elbow_plot
 ```
 
 ### 2.3.4 PLS + Candidates
@@ -281,7 +350,7 @@ R_new$group <- cols
 R_new <- R_new |> rownames_to_column() |> 
   pivot_longer(cols="Comp 1":"Comp 3", names_to = "component")
 
-ggplot(R_new, aes(group=rowname)) + 
+lineplot <- ggplot(R_new, aes(group=rowname)) + 
   ylab("Residual") +
   # Plot the rest of the dataset with 10% opacity:
   geom_point(data=R_new[R_new$group=="gene",], 
@@ -303,6 +372,12 @@ ggplot(R_new, aes(group=rowname)) +
              mapping=aes(x=component, y=value, color=group)) + 
   geom_line(data=R_new[R_new$group=="Bottom 10",], 
              mapping=aes(x=component, y=value, color=group))
+
+lineplot
+```
+
+```{r}
+lineplot + elbow_plot + plot_annotation(tag_levels = "a")
 ```
 
 ```{r}
@@ -351,11 +426,10 @@ p2 <- ggplot(data=df2, aes(gene1, gene2)) +
   geom_point(aes(colour=Celltype), alpha = 0.5) + 
   xlab(paste0("Bait: ", name1)) +
   ylab(paste0("Candidate: ", name2)) +
-  ggtitle(paste0("Gene expression \ncorr:", cor2))+ 
-  theme(legend.position = "none")
+  ggtitle(paste0("Gene expression \ncorr:", cor2))
 
 
-p1+p2
+p1+p2 + plot_annotation(tag_levels="a")
 ```
 
 ```{r, fig.width=10, fig.height=6}
