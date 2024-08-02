@@ -42,6 +42,7 @@ library(pls)
 library(Seurat)
 
 
+library(hdWGCNA)
 source("code/DATA_SIM_FUNCS.R")
 source("code/MASCARA_FUNCS.R")
 ```
@@ -167,6 +168,7 @@ seurat_obj <- SetupForWGCNA(
   fraction = 0.01, # fraction of cells that a gene needs to be expressed in order to be included
   wgcna_name = "tutorial" # the name of the hdWGCNA experiment
 )
+seurat_obj
 ```
 
 ### 2.2.2 Metacell creation
@@ -185,6 +187,9 @@ seurat_obj <- MetacellsByGroups(
 # normalize metacell expression matrix:
 seurat_obj <- NormalizeMetacells(seurat_obj)
 ```
+```{r}
+seurat_obj
+```
 
 ```{r}
 seurat_obj <- ScaleMetacells(seurat_obj, features=VariableFeatures(seurat_obj))
@@ -198,6 +203,7 @@ p1
 
 ```{r}
 metacell_obj <- GetMetacellObject(seurat_obj)
+metacell_obj
 ```
 
 ### 2.2.3 Selection of expressed cells
@@ -211,7 +217,7 @@ for(bait in fig2e_genes){
 # Select suberin genes and calculate the sum of the expression
 # if that sum is > 1: keep
 expr <- GetAssayData(metacell_obj)
-suberin_expression_cells <- colSums(expr[rownames(expr) %in% found,]) > 1
+suberin_expression_cells <- colSums(expr[rownames(expr) %in% found,]) > 0
 
 pbmc_suberin <- metacell_obj[,suberin_expression_cells]
 table(suberin_expression_cells)
@@ -225,12 +231,12 @@ DimPlot(pbmc_suberin)
 
 ```{r}
 counts.sub <- as.matrix(GetAssayData(pbmc_suberin))
-non_zero <- apply(counts.sub, 1, function(x) sum(x > 0)/length(x))
-
-# At least 1% data:
-counts.sub <- counts.sub[non_zero > 0.05, ]
-cat("Cells: ", dim(counts.sub)[2], "\n")
-cat("Genes: ", dim(counts.sub)[1], "\n")
+# non_zero <- apply(counts.sub, 1, function(x) sum(x > 0)/length(x))
+# 
+# # At least 1% data:
+# counts.sub <- counts.sub[non_zero > 0.05, ]
+# cat("Cells: ", dim(counts.sub)[2], "\n")
+# cat("Genes: ", dim(counts.sub)[1], "\n")
 ```
 
 ```{r}
@@ -284,6 +290,42 @@ ggplot(data=melted_cormat, aes(x=Var1, y=Var2, fill=value)) +
 
 ```
 
+```{r}
+cormat <- cor(resids[,which(colnames(resids) %in% found[1:4])])
+
+melted_cormat <- melt(cormat)
+
+cormat1 <- ggplot(data=melted_cormat, aes(x=Var1, y=Var2, fill=value)) + 
+  geom_tile() + 
+  xlab("") +
+  ylab("") +
+  geom_text(aes(label=round(value, 2)), color="black") +
+  scale_fill_gradient2(low = "#075AFF",
+                       mid = "#FFFFCC",
+                       high = "#FF0000",
+                       breaks=c(-1, 0, 1),
+                       limits=c(-1,1)) +
+  theme(axis.text.x = element_text(angle=90, vjust=.5, hjust=1), legend.position = "none") + ggtitle("Residuals")
+
+####
+counts.sub2 <- t(counts.sub)
+cormat <- cor(counts.sub2[, which(colnames(counts.sub2) %in% found[1:4])])
+melted_cormat <- melt(cormat)
+cormat2 <- ggplot(data=melted_cormat, aes(x=Var1, y=Var2, fill=value)) + 
+  geom_tile() + 
+  xlab("") +
+  ylab("") +
+  geom_text(aes(label=round(value, 2)), color="black") +
+  scale_fill_gradient2(low = "#075AFF",
+                       mid = "#FFFFCC",
+                       high = "#FF0000",
+                       breaks=c(-1, 0, 1),
+                       limits=c(-1,1)) +
+  theme(axis.text.x = element_text(angle=90, vjust=.5, hjust=1), axis.text.y=element_blank()) + ggtitle("Gene expression") 
+
+(cormat1 | cormat2) + plot_annotation('Meta cells', tag_levels = list(c("c", "d")))
+```
+
 ### 2.3.3 Number of components (elbow)
 
 ```{r}
@@ -300,7 +342,7 @@ for(i in c(1:nrep)){
   result[paste0("rep", i)] <- fit$Xvar/fit$Xtotvar
 }
 
-result_melt <- result |> pivot_longer(cols="rep1" : "rep5")
+result_melt <- result |> pivot_longer(cols="rep1" : paste0("rep",nrep))
 elbow_plot <- ggplot(data=result_melt, mapping=aes(x=comp, y=value)) + geom_point() + geom_smooth() + geom_jitter() + xlab("Component") + ylab("Fraction explained variance") + scale_x_continuous(breaks=c(1:ncomp))
 
 elbow_plot
@@ -377,7 +419,7 @@ lineplot
 ```
 
 ```{r}
-lineplot + elbow_plot + plot_annotation(tag_levels = "a")
+
 ```
 
 ```{r}
@@ -449,8 +491,7 @@ legend("topright",
 ```
 
 ```{r}
-print(name1)
-print(name2)
+(lineplot + elbow_plot) + p1+p2 + plot_annotation(tag_levels="a")
 ```
 
 # 3 MASCARA on strigolactone genes
@@ -459,15 +500,15 @@ print(name2)
 
 ```{r}
 # pbmc <- readRDS("../02_scRNA_analysis/data/single_cell_pbmc.rds")
-pbmc <- readRDS("../02_scRNA_analysis/data/pbmc_with_scina.rds")
+# pbmc <- readRDS("../02_scRNA_analysis/data/pbmc_with_scina.rds")
 ```
 
 ```{r}
-colnames(pbmc@meta.data)
+# colnames(pbmc@meta.data)
 ```
 
 ```{r}
-table(pbmc@meta.data$SCINA)
+# table(pbmc@meta.data$SCINA)
 ```
 
 ## 3.2 Summary statistics
@@ -475,16 +516,16 @@ table(pbmc@meta.data$SCINA)
 ### 3.2.1 Dotplots of strigolactone genes
 
 ```{r}
-strigolactone_genes <- c("Solyc09g065750","Solyc01g090660","Solyc08g066650","Solyc08g062950", "Solyc10g018150","Solyc02g084930", "Solyc08g067620", "Solyc08g067610")
-found <- c()
-for(bait in strigolactone_genes){
-  found <- c(found, rownames(pbmc)[grep(bait, rownames(pbmc))])
-}
-for(item in c("chisquare", "scsorter", "sctype_classification", "SCINA")){
-  Idents(pbmc) <- item
-  p <- DotPlot(pbmc, features=found, scale=TRUE,) + RotatedAxis() + coord_flip() + ggtitle(item)
-  plot(p)
-}
+# strigolactone_genes <- c("Solyc09g065750","Solyc01g090660","Solyc08g066650","Solyc08g062950", "Solyc10g018150","Solyc02g084930", "Solyc08g067620", "Solyc08g067610")
+# found <- c()
+# for(bait in strigolactone_genes){
+#   found <- c(found, rownames(pbmc)[grep(bait, rownames(pbmc))])
+# }
+# for(item in c("chisquare", "scsorter", "sctype_classification", "SCINA")){
+#   Idents(pbmc) <- item
+#   p <- DotPlot(pbmc, features=found, scale=TRUE,) + RotatedAxis() + coord_flip() + ggtitle(item)
+#   plot(p)
+# }
 
 ```
 
@@ -493,207 +534,207 @@ for(item in c("chisquare", "scsorter", "sctype_classification", "SCINA")){
 ### 3.3.1 Drop unknowns
 
 ```{r}
-pbmc <- pbmc[, pbmc$SCINA != "unknown"]
-pbmc
+# pbmc <- pbmc[, pbmc$SCINA != "unknown"]
+# pbmc
 ```
 
 ### 3.3.2 Selection of expressed cells
 
 ```{r}
-found <- c()
-for(bait in strigolactone_genes){
-  found <- c(found, rownames(pbmc)[grep(bait, rownames(pbmc))])
-}
-# Select suberin genes and calculate the sum of the expression
-# if that sum is > 1: keep
-expr <- GetAssayData(pbmc)
-strigolactone_expression_cells <- colSums(expr[rownames(expr) %in% found,]) > 1
-
-pbmc_selection <- pbmc[,strigolactone_expression_cells]
-table(strigolactone_expression_cells)
+# found <- c()
+# for(bait in strigolactone_genes){
+#   found <- c(found, rownames(pbmc)[grep(bait, rownames(pbmc))])
+# }
+# # Select suberin genes and calculate the sum of the expression
+# # if that sum is > 1: keep
+# expr <- GetAssayData(pbmc)
+# strigolactone_expression_cells <- colSums(expr[rownames(expr) %in% found,]) > 1
+# 
+# pbmc_selection <- pbmc[,strigolactone_expression_cells]
+# table(strigolactone_expression_cells)
 ```
 
 ```{r}
-DimPlot(pbmc_selection)
+# DimPlot(pbmc_selection)
 ```
 
 ### 3.3.3 Selection of expressed genes
 
 ```{r}
-counts.sub <- as.matrix(GetAssayData(pbmc_selection))
-non_zero <- apply(counts.sub, 1, function(x) sum(x > 0)/length(x))
-
-# At least 2% data:
-counts.sub <- counts.sub[non_zero > 0.02, ]
-cat("Cells: ", dim(counts.sub)[2], "\n")
-cat("Genes: ", dim(counts.sub)[1], "\n")
+# counts.sub <- as.matrix(GetAssayData(pbmc_selection))
+# non_zero <- apply(counts.sub, 1, function(x) sum(x > 0)/length(x))
+# 
+# # At least 2% data:
+# counts.sub <- counts.sub[non_zero > 0.02, ]
+# cat("Cells: ", dim(counts.sub)[2], "\n")
+# cat("Genes: ", dim(counts.sub)[1], "\n")
 ```
 
 ## 3.4 MASCARA
 
 ```{r}
-meta.sub <- pbmc_selection@meta.data
-meta <- data.frame(scsorter=meta.sub$scsorter, 
-                   seurat=meta.sub$seurat_clusters, 
-                   chisquare=meta.sub$chisquare, 
-                   sctype=meta.sub$sctype,
-                   SCINA=meta.sub$SCINA)
-meta
+# meta.sub <- pbmc_selection@meta.data
+# meta <- data.frame(scsorter=meta.sub$scsorter, 
+#                    seurat=meta.sub$seurat_clusters, 
+#                    chisquare=meta.sub$chisquare, 
+#                    sctype=meta.sub$sctype,
+#                    SCINA=meta.sub$SCINA)
+# meta
 ```
 
 ```{r}
-as.data.frame(table(meta$SCINA)) |> ggplot() + 
-  geom_col(aes(y=Var1, x=Freq)) + 
-  xlab("Cell count") + 
-  ylab("Celltype")
+# as.data.frame(table(meta$SCINA)) |> ggplot() + 
+#   geom_col(aes(y=Var1, x=Freq)) + 
+#   xlab("Cell count") + 
+#   ylab("Celltype")
 ```
 
 ### 3.4.1 ASCA
 
 ```{r}
-ar <- ASCA_decompose(d = meta, x = t(counts.sub), f = "SCINA")
-resids <- ar$residuals
+# ar <- ASCA_decompose(d = meta, x = t(counts.sub), f = "SCINA")
+# resids <- ar$residuals
 ```
 
 ```{r}
-hist(resids)
+# hist(resids)
 ```
 
 ### 3.4.2 Correl plot
 
 ```{r}
-found <- found[found %in% colnames(resids)]
-found
+# found <- found[found %in% colnames(resids)]
+# found
 ```
 
 ```{r}
-cormat <- cor(resids[,which(colnames(resids) %in% found)])
-
-melted_cormat <- melt(cormat)
-
-ggplot(data=melted_cormat, aes(x=Var1, y=Var2, fill=value)) + 
-  geom_tile() + 
-  xlab("") +
-  ylab("") +
-  geom_text(aes(label=round(value, 2)), color="white") +
-  scale_fill_gradient2(low = "#075AFF",
-                       mid = "#FFFFCC",
-                       high = "#FF0000",
-                       breaks=c(-1, 0, 1),
-                       limits=c(-1,1)) +
-  theme(axis.text.x = element_text(angle=90, vjust=.5, hjust=1))
+# cormat <- cor(resids[,which(colnames(resids) %in% found)])
+# 
+# melted_cormat <- melt(cormat)
+# 
+# ggplot(data=melted_cormat, aes(x=Var1, y=Var2, fill=value)) + 
+#   geom_tile() + 
+#   xlab("") +
+#   ylab("") +
+#   geom_text(aes(label=round(value, 2)), color="white") +
+#   scale_fill_gradient2(low = "#075AFF",
+#                        mid = "#FFFFCC",
+#                        high = "#FF0000",
+#                        breaks=c(-1, 0, 1),
+#                        limits=c(-1,1)) +
+#   theme(axis.text.x = element_text(angle=90, vjust=.5, hjust=1))
 
 ```
 
 ### 3.4.3 PLS + Candidates
 
 ```{r}
-library(pls)
-X <- resids[,-which(colnames(resids) %in% found[1:4])]
-y <- resids[,which(colnames(resids) %in% found[1:4])]
-spls_res <- simpls.fit(X, y, ncomp = 5)
-
-q_bar <- colMeans(spls_res$Yloadings)
-R <- spls_res$projection
-R_TP <- (dot(t(R),q_bar)/dot(q_bar,q_bar))
-  
-Candidates <- as.data.frame(R_TP[order(R_TP, decreasing = TRUE)])
+# library(pls)
+# X <- resids[,-which(colnames(resids) %in% found[1:4])]
+# y <- resids[,which(colnames(resids) %in% found[1:4])]
+# spls_res <- simpls.fit(X, y, ncomp = 5)
+# 
+# q_bar <- colMeans(spls_res$Yloadings)
+# R <- spls_res$projection
+# R_TP <- (dot(t(R),q_bar)/dot(q_bar,q_bar))
+#   
+# Candidates <- as.data.frame(R_TP[order(R_TP, decreasing = TRUE)])
 ```
 
 ### 3.4.4 Lineplot the components
 
 ```{r}
 # Create color list of top20:
-cols <- rep("gene", nrow(R))
-top10 <- head(rownames(Candidates), 10)
-bot10 <- tail(rownames(Candidates), 10)
+# cols <- rep("gene", nrow(R))
+# top10 <- head(rownames(Candidates), 10)
+# bot10 <- tail(rownames(Candidates), 10)
+# 
+# cols[rownames(R) %in% top10] <- "Top 10"
+# cols[rownames(R) %in% bot10] <- "Bottom 10"
+# cols[rownames(R) %in% found] <- "bait"
+# to_plot =  data.frame(x=R[, 1], y=R[,2], group=as.factor(cols))
+# 
 
-cols[rownames(R) %in% top10] <- "Top 10"
-cols[rownames(R) %in% bot10] <- "Bottom 10"
-cols[rownames(R) %in% found] <- "bait"
-to_plot =  data.frame(x=R[, 1], y=R[,2], group=as.factor(cols))
-
-
-ggplot(data=to_plot, aes(x=x, y=y, color=group)) + geom_point()
+# ggplot(data=to_plot, aes(x=x, y=y, color=group)) + geom_point()
 ```
 
 ```{r}
-R_new <- as.data.frame(R)
-R_new$group <- cols
-
-# Same function as depreciated `tidyverse::melt()`:
-R_new <- R_new |> rownames_to_column() |> 
-  pivot_longer(cols="Comp 1":"Comp 5", names_to = "component")
-
-ggplot(R_new, aes(group=rowname)) + 
-  ylab("Residual") +
-  # Plot the rest of the dataset with 10% opacity:
-  geom_point(data=R_new[R_new$group=="gene",], 
-             mapping=aes(x=component, y=value),col="darkgrey", alpha=0.1) +
-  geom_line(data=R_new[R_new$group=="gene",], 
-            mapping=aes(x=component, y=value),col="darkgrey", alpha=0.1) +
-  # Plot baits
-  geom_point(data=R_new[R_new$group=="bait",], 
-             mapping=aes(x=component, y=value, color=group)) +
-  geom_line(data=R_new[R_new$group=="bait",], 
-             mapping=aes(x=component, y=value, color=group)) +
-  # Plot Top candidates:
-  geom_point(data=R_new[R_new$group=="Top 10",], 
-             mapping=aes(x=component, y=value, color=group)) + 
-  geom_line(data=R_new[R_new$group=="Top 10",], 
-             mapping=aes(x=component, y=value, color=group)) +
-  # Plot Bottom candidates:
-  geom_point(data=R_new[R_new$group=="Bottom 10",], 
-             mapping=aes(x=component, y=value, color=group)) + 
-  geom_line(data=R_new[R_new$group=="Bottom 10",], 
-             mapping=aes(x=component, y=value, color=group))
+# R_new <- as.data.frame(R)
+# R_new$group <- cols
+# 
+# # Same function as depreciated `tidyverse::melt()`:
+# R_new <- R_new |> rownames_to_column() |> 
+#   pivot_longer(cols="Comp 1":"Comp 5", names_to = "component")
+# 
+# ggplot(R_new, aes(group=rowname)) + 
+#   ylab("Residual") +
+#   # Plot the rest of the dataset with 10% opacity:
+#   geom_point(data=R_new[R_new$group=="gene",], 
+#              mapping=aes(x=component, y=value),col="darkgrey", alpha=0.1) +
+#   geom_line(data=R_new[R_new$group=="gene",], 
+#             mapping=aes(x=component, y=value),col="darkgrey", alpha=0.1) +
+#   # Plot baits
+#   geom_point(data=R_new[R_new$group=="bait",], 
+#              mapping=aes(x=component, y=value, color=group)) +
+#   geom_line(data=R_new[R_new$group=="bait",], 
+#              mapping=aes(x=component, y=value, color=group)) +
+#   # Plot Top candidates:
+#   geom_point(data=R_new[R_new$group=="Top 10",], 
+#              mapping=aes(x=component, y=value, color=group)) + 
+#   geom_line(data=R_new[R_new$group=="Top 10",], 
+#              mapping=aes(x=component, y=value, color=group)) +
+#   # Plot Bottom candidates:
+#   geom_point(data=R_new[R_new$group=="Bottom 10",], 
+#              mapping=aes(x=component, y=value, color=group)) + 
+#   geom_line(data=R_new[R_new$group=="Bottom 10",], 
+#              mapping=aes(x=component, y=value, color=group))
 ```
 
 ```{r}
-Candidates
+# Candidates
 ```
 
 ```{r}
-resids_t <- t(resids)
-found %in% rownames(resids_t)
+# resids_t <- t(resids)
+# found %in% rownames(resids_t)
 ```
 
 ### 3.4.5 Plot example genes
 
 ```{r}
-library(scales)
-name1 <- rownames(Candidates)[2]
-name2 <- found[2]
-
-# Corrected counts (residuals)
-df1 <- data.frame(gene1=resids_t[name1, ], 
-                  gene2=resids_t[name2, ], 
-                  Celltype = meta.sub$SCINA)
-cor1 <- round(cor(df1$gene1, df1$gene2),2)
-
-# Normalized + transformed counts:
-df2 <- data.frame(gene1=counts.sub[name1, ], 
-                  gene2=counts.sub[name2, ], 
-                  Celltype = meta.sub$SCINA)
-cor2 <- round(cor(df2$gene1, df2$gene2),2)
-
-
-# P1
-p1 <- ggplot(data=df1, aes(gene1, gene2)) + 
-  geom_point(aes(colour=Celltype), alpha = 0.5) + 
-  xlab(paste0("Bait: ", name1)) +
-  ylab(paste0("Candidate: ", name2)) +
-  ggtitle(paste0("Residuals of gene expression\ncorr:", cor1)) + 
-  theme(legend.position = "none")
-
-# P2
-p2 <- ggplot(data=df2, aes(gene1, gene2)) + 
-  geom_point(aes(colour=Celltype), alpha = 0.5) + 
-  xlab(paste0("Bait: ", name1)) +
-  ylab(paste0("Candidate: ", name2)) +
-  ggtitle(paste0("Gene expression \ncorr:", cor2))+ 
-  theme(legend.position = "none")
-
-
-p1+p2
+# library(scales)
+# name1 <- rownames(Candidates)[2]
+# name2 <- found[2]
+# 
+# # Corrected counts (residuals)
+# df1 <- data.frame(gene1=resids_t[name1, ], 
+#                   gene2=resids_t[name2, ], 
+#                   Celltype = meta.sub$SCINA)
+# cor1 <- round(cor(df1$gene1, df1$gene2),2)
+# 
+# # Normalized + transformed counts:
+# df2 <- data.frame(gene1=counts.sub[name1, ], 
+#                   gene2=counts.sub[name2, ], 
+#                   Celltype = meta.sub$SCINA)
+# cor2 <- round(cor(df2$gene1, df2$gene2),2)
+# 
+# 
+# # P1
+# p1 <- ggplot(data=df1, aes(gene1, gene2)) + 
+#   geom_point(aes(colour=Celltype), alpha = 0.5) + 
+#   xlab(paste0("Bait: ", name1)) +
+#   ylab(paste0("Candidate: ", name2)) +
+#   ggtitle(paste0("Residuals of gene expression\ncorr:", cor1)) + 
+#   theme(legend.position = "none")
+# 
+# # P2
+# p2 <- ggplot(data=df2, aes(gene1, gene2)) + 
+#   geom_point(aes(colour=Celltype), alpha = 0.5) + 
+#   xlab(paste0("Bait: ", name1)) +
+#   ylab(paste0("Candidate: ", name2)) +
+#   ggtitle(paste0("Gene expression \ncorr:", cor2))+ 
+#   theme(legend.position = "none")
+# 
+# 
+# p1+p2
 ```

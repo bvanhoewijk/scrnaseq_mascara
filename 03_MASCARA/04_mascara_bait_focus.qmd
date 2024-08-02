@@ -136,7 +136,7 @@ for(bait in fig2e_genes){
 # Select suberin genes and calculate the sum of the expression
 # if that sum is > 1: keep
 expr <- GetAssayData(pbmc_suberin)
-suberin_expression_cells <- colSums(expr[rownames(expr) %in% found,]) > 1
+suberin_expression_cells <- colSums(expr[rownames(expr) %in% found,]) > 0
 
 pbmc_suberin <- pbmc_suberin[,suberin_expression_cells]
 table(suberin_expression_cells)
@@ -181,9 +181,7 @@ hist(resids)
 
 ### 2.3.2 Correl plot
 
-```{r}
-dim(X)
-```
+#### 2.3.2.1 Explained variance
 
 ```{r}
 
@@ -201,26 +199,45 @@ for(i in c(1:nrep)){
 }
 
 result_melt <- result |> pivot_longer(cols="rep1" : "rep5")
-ggplot(data=result_melt, mapping=aes(x=comp, y=value)) + geom_point() + geom_smooth() + geom_jitter() + xlab("Component") + ylab("Fraction explained variance") + scale_x_continuous(breaks=c(1:ncomp))
+scree_plot_pls <- ggplot(data=result_melt, mapping=aes(x=comp, y=value)) + geom_point() + geom_smooth() + geom_jitter() + xlab("Component") + ylab("Fraction explained variance") + scale_x_continuous(breaks=c(1:ncomp))
+scree_plot_pls
 ```
 
+#### 2.3.2.2 Actual correlation (pretty ggplot2)
 ```{r}
 cormat <- cor(resids[,which(colnames(resids) %in% found[1:4])])
 
 melted_cormat <- melt(cormat)
 
-ggplot(data=melted_cormat, aes(x=Var1, y=Var2, fill=value)) + 
+cormat1 <- ggplot(data=melted_cormat, aes(x=Var1, y=Var2, fill=value)) + 
   geom_tile() + 
   xlab("") +
   ylab("") +
-  geom_text(aes(label=round(value, 2)), color="white") +
+  geom_text(aes(label=round(value, 2)), color="black") +
   scale_fill_gradient2(low = "#075AFF",
                        mid = "#FFFFCC",
                        high = "#FF0000",
                        breaks=c(-1, 0, 1),
                        limits=c(-1,1)) +
-  theme(axis.text.x = element_text(angle=90, vjust=.5, hjust=1))
+  theme(axis.text.x = element_text(angle=90, vjust=.5, hjust=1), legend.position = "none") + ggtitle("Residuals")
 
+####
+counts.sub2 <- t(counts.sub)
+cormat <- cor(counts.sub2[, which(colnames(counts.sub2) %in% found[1:4])])
+melted_cormat <- melt(cormat)
+cormat2 <- ggplot(data=melted_cormat, aes(x=Var1, y=Var2, fill=value)) + 
+  geom_tile() + 
+  xlab("") +
+  ylab("") +
+  geom_text(aes(label=round(value, 2)), color="black") +
+  scale_fill_gradient2(low = "#075AFF",
+                       mid = "#FFFFCC",
+                       high = "#FF0000",
+                       breaks=c(-1, 0, 1),
+                       limits=c(-1,1)) +
+  theme(axis.text.x = element_text(angle=90, vjust=.5, hjust=1), axis.text.y=element_blank()) + ggtitle("Gene expression") 
+
+(cormat1 | cormat2) + plot_annotation('Single cells', tag_levels = list(c("a", "b")))
 ```
 
 ### 2.3.3 PLS + Candidates
@@ -244,10 +261,10 @@ Candidates <- as.data.frame(R_TP[order(R_TP, decreasing = TRUE)])
 # Create color list of top20:
 cols <- rep("gene", nrow(R))
 top10 <- head(rownames(Candidates), 10)
-bot10 <- tail(rownames(Candidates), 10)
+# bot10 <- tail(rownames(Candidates), 10)
 
 cols[rownames(R) %in% top10] <- "Top 10"
-cols[rownames(R) %in% bot10] <- "Bottom 10"
+# cols[rownames(R) %in% bot10] <- "Bottom 10"
 cols[rownames(R) %in% found] <- "bait"
 to_plot =  data.frame(x=R[, 1], y=R[,2], group=as.factor(cols))
 
@@ -263,7 +280,7 @@ R_new$group <- cols
 R_new <- R_new |> rownames_to_column() |> 
   pivot_longer(cols="Comp 1":"Comp 3", names_to = "component")
 
-ggplot(R_new, aes(group=rowname)) + 
+line_plot <- ggplot(R_new, aes(group=rowname)) + 
   ylab("Residual") +
   # Plot the rest of the dataset with 10% opacity:
   geom_point(data=R_new[R_new$group=="gene",], 
@@ -285,10 +302,13 @@ ggplot(R_new, aes(group=rowname)) +
              mapping=aes(x=component, y=value, color=group)) + 
   geom_line(data=R_new[R_new$group=="Bottom 10",], 
              mapping=aes(x=component, y=value, color=group))
+
+
+line_plot
 ```
 
 ```{r}
-Candidates
+head(Candidates, 20)
 ```
 
 ```{r}
@@ -331,11 +351,11 @@ p2 <- ggplot(data=df2, aes(gene1, gene2)) +
   geom_point(aes(colour=Celltype), alpha = 0.5) + 
   xlab(paste0("Bait: ", name1)) +
   ylab(paste0("Candidate: ", name2)) +
-  ggtitle(paste0("Gene expression \ncorr:", cor2))+ 
-  theme(legend.position = "none")
+  ggtitle(paste0("Gene expression \ncorr:", cor2))
 
 
-p1+p2
+
+(line_plot + scree_plot_pls) / (p1+p2) + plot_annotation(tag_levels = "a")
 ```
 
 # 3 MASCARA on strigolactone genes
@@ -421,7 +441,7 @@ meta <- data.frame(scsorter=meta.sub$scsorter,
                    chisquare=meta.sub$chisquare, 
                    sctype=meta.sub$sctype,
                    SCINA=meta.sub$SCINA)
-meta
+head(meta)
 ```
 
 ```{r}
