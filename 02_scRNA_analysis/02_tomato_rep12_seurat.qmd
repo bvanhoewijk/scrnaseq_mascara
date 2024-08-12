@@ -85,6 +85,10 @@ table(to_keep)
 ncol(pbmc)
 ```
 
+```{r}
+ggplot(rowMeans(GetAssayData(pbmc))) + geom_violin()
+```
+
 
 
 ```{r}

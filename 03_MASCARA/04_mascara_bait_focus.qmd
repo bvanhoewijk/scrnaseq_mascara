@@ -185,8 +185,9 @@ hist(resids)
 
 ```{r}
 
-X <- resids[,-which(colnames(resids) %in% found[1:4])]
-y <- resids[,which(colnames(resids) %in% found[1:4])]
+baits <- found[5:8]
+X <- resids[,-which(colnames(resids) %in% baits)]
+y <- resids[,which(colnames(resids) %in% baits)]
 
 ncomp <- 10
 nrep  <- 5
@@ -205,11 +206,11 @@ scree_plot_pls
 
 #### 2.3.2.2 Actual correlation (pretty ggplot2)
 ```{r}
-cormat <- cor(resids[,which(colnames(resids) %in% found[1:4])])
+cormat1 <- cor(resids[,which(colnames(resids) %in% baits)])
 
-melted_cormat <- melt(cormat)
+melted_cormat <- melt(cormat1)
 
-cormat1 <- ggplot(data=melted_cormat, aes(x=Var1, y=Var2, fill=value)) + 
+cormat_fig1 <- ggplot(data=melted_cormat, aes(x=Var1, y=Var2, fill=value)) + 
   geom_tile() + 
   xlab("") +
   ylab("") +
@@ -219,13 +220,13 @@ cormat1 <- ggplot(data=melted_cormat, aes(x=Var1, y=Var2, fill=value)) +
                        high = "#FF0000",
                        breaks=c(-1, 0, 1),
                        limits=c(-1,1)) +
-  theme(axis.text.x = element_text(angle=90, vjust=.5, hjust=1), legend.position = "none") + ggtitle("Residuals")
+  theme(axis.text.x = element_text(angle=90, vjust=.5, hjust=1), axis.text.y=element_blank()) + ggtitle("Residuals")
 
 ####
 counts.sub2 <- t(counts.sub)
-cormat <- cor(counts.sub2[, which(colnames(counts.sub2) %in% found[1:4])])
-melted_cormat <- melt(cormat)
-cormat2 <- ggplot(data=melted_cormat, aes(x=Var1, y=Var2, fill=value)) + 
+cormat2 <- cor(counts.sub2[, which(colnames(counts.sub2) %in% baits)])
+melted_cormat <- melt(cormat2)
+cormat_fig2 <- ggplot(data=melted_cormat, aes(x=Var1, y=Var2, fill=value)) + 
   geom_tile() + 
   xlab("") +
   ylab("") +
@@ -235,18 +236,47 @@ cormat2 <- ggplot(data=melted_cormat, aes(x=Var1, y=Var2, fill=value)) +
                        high = "#FF0000",
                        breaks=c(-1, 0, 1),
                        limits=c(-1,1)) +
-  theme(axis.text.x = element_text(angle=90, vjust=.5, hjust=1), axis.text.y=element_blank()) + ggtitle("Gene expression") 
+  theme(axis.text.x = element_text(angle=90, vjust=.5, hjust=1), legend.position = "none") + ggtitle("Gene expression") 
 
-(cormat1 | cormat2) + plot_annotation('Single cells', tag_levels = list(c("a", "b")))
+(cormat_fig2 | cormat_fig1) + plot_annotation('Single cells', tag_levels = list(c("a", "b")))
+
+
+
+```
+```{r}
+print("Residuals")
+round(mean(cormat1[upper.tri(cormat1)]), 2)
+
+print("Gene expression")
+round(mean(cormat2[upper.tri(cormat2)]), 2)
+```
+
+
+```{r}
+cormat <- cor(t(counts.sub[found,]))
+
+melted_cormat <- melt(cormat)
+
+ggplot(data=melted_cormat, aes(x=Var1, y=Var2, fill=value)) + 
+  geom_tile() + 
+  xlab("") +
+  ylab("") +
+  geom_text(aes(label=round(value, 1)), color="white") +
+  scale_fill_gradient2(low = "#075AFF",
+                       mid = "#FFFFCC",
+                       high = "#FF0000",
+                       breaks=c(-1, 0, 1),
+                       limits=c(-1,1)) +
+  theme(axis.text.x = element_text(angle=90, vjust=.5, hjust=1))
 ```
 
 ### 2.3.3 PLS + Candidates
 
 ```{r}
 library(pls)
-X <- resids[,-which(colnames(resids) %in% found[1:4])]
-y <- resids[,which(colnames(resids) %in% found[1:4])]
-spls_res <- simpls.fit(X, y, ncomp = 3)
+X <- resids[,-which(colnames(resids) %in% baits)]
+y <- resids[,which(colnames(resids) %in% baits)]
+spls_res <- simpls.fit(X, y, ncomp = 5)
 
 q_bar <- colMeans(spls_res$Yloadings)
 R <- spls_res$projection
@@ -278,7 +308,7 @@ R_new$group <- cols
 
 # Same function as depreciated `tidyverse::melt()`:
 R_new <- R_new |> rownames_to_column() |> 
-  pivot_longer(cols="Comp 1":"Comp 3", names_to = "component")
+  pivot_longer(cols="Comp 1":"Comp 5", names_to = "component")
 
 line_plot <- ggplot(R_new, aes(group=rowname)) + 
   ylab("Residual") +
@@ -308,10 +338,6 @@ line_plot
 ```
 
 ```{r}
-head(Candidates, 20)
-```
-
-```{r}
 resids_t <- t(resids)
 found %in% rownames(resids_t)
 ```
@@ -320,11 +346,520 @@ found %in% rownames(resids_t)
 
 ```{r}
 library(scales)
-# name1 <- rownames(Candidates)[2]
-# name2 <- found[2]
-name1 <- "gene:Solyc03g097500.3"
-name2 <- "gene:Solyc09g083050.3"
+name1 <- rownames(Candidates)[1]
+name2 <- found[5]
 
+# P1
+dim(bla1 <- spls_res$scores %*% t(spls_res$loadings))
+dim(bla2 <- spls_res$Yscores %*% t(spls_res$Yloadings))
+
+df1 <- data.frame(gene1=bla1[,name1], 
+                  gene2=bla2[,name2], 
+                  Celltype = meta.sub$SCINA)
+cor1 <- round(cor(df1$gene1, df1$gene2),2)
+p1 <- ggplot(data=df1, aes(gene1, gene2)) +
+  geom_point(aes(colour=Celltype), alpha = 0.5) +
+  xlab(paste0("Bait: ", name1)) +
+  ylab(paste0("Candidate: ", name2)) +
+  ggtitle(paste0("Reinflated MASCARA\nr = ", cor1))+  
+  theme(legend.position = "none")
+
+# P2
+# Normalized + transformed counts:
+df2 <- data.frame(gene1=counts.sub[name1, ], 
+                  gene2=counts.sub[name2, ], 
+                  Celltype = meta.sub$SCINA)
+cor2 <- round(cor(df2$gene1, df2$gene2),2)
+
+p2 <- ggplot(data=df2, aes(gene1, gene2)) + 
+  geom_point(aes(colour=Celltype), alpha = 0.5) + 
+  xlab(paste0("Bait: ", name1)) +
+  ylab(paste0("Candidate: ", name2)) +
+  ggtitle(paste0("Normalized gene expression\nr = ", cor2))+  
+  theme(legend.position = "none")
+
+# P3
+# Residuals
+df3 <- data.frame(gene1=resids[,name1], 
+                  gene2=resids[,name2], 
+                  Celltype = meta.sub$SCINA)
+cor3 <- round(cor(df3$gene1, df3$gene2),2)
+
+p3 <- ggplot(data=df3, aes(gene1, gene2)) + 
+  geom_point(aes(colour=Celltype), alpha = 0.5) + 
+  xlab(paste0("Bait: ", name1)) +
+  ylab(paste0("Candidate: ", name2)) +
+  ggtitle(paste0("Residuals\nr = ", cor2))
+
+
+
+(line_plot + scree_plot_pls) / (p1+p2+p3) + plot_annotation(tag_levels = "a")
+```
+```{r}
+cormat <- cor(resids[,baits])
+
+melted_cormat <- melt(cormat)
+
+cormat1 <- ggplot(data=melted_cormat, aes(x=Var1, y=Var2, fill=value)) + 
+  geom_tile() + 
+  xlab("") +
+  ylab("") +
+  geom_text(aes(label=round(value, 2)), color="black") +
+  scale_fill_gradient2(low = "#075AFF",
+                       mid = "#FFFFCC",
+                       high = "#FF0000",
+                       breaks=c(-1, 0, 1),
+                       limits=c(-1,1)) +
+  theme(axis.text.x = element_text(angle=90, vjust=.5, hjust=1), axis.text.y=element_blank()) + ggtitle("Residuals")
+
+####
+counts.sub2 <- t(counts.sub)
+cormat <- cor(counts.sub2[, which(colnames(counts.sub2) %in% baits)])
+melted_cormat <- melt(cormat)
+cormat2 <- ggplot(data=melted_cormat, aes(x=Var1, y=Var2, fill=value)) + 
+  geom_tile() + 
+  xlab("") +
+  ylab("") +
+  geom_text(aes(label=round(value, 2)), color="black") +
+  scale_fill_gradient2(low = "#075AFF",
+                       mid = "#FFFFCC",
+                       high = "#FF0000",
+                       breaks=c(-1, 0, 1),
+                       limits=c(-1,1)) +
+  theme(axis.text.x = element_text(angle=90, vjust=.5, hjust=1), legend.position = "none") + ggtitle("Gene expression") 
+
+(cormat2 | cormat1) + plot_annotation('Single cells', tag_levels = list(c("a", "b")))
+```
+
+
+```{r, fig.width=15, fig.height=8}
+library(heatmap.2x)
+
+poi <- found
+n <- 50
+top_n <- c(head(rownames(Candidates), n), baits)
+
+annot1 <- rep("white", length(top_n))
+annot1[top_n %in% found] <- "green"
+annot2 <- rep("white", length(top_n))
+annot2[top_n %in% baits] <- "blue"
+
+
+d <- counts.sub[top_n, ]
+final_annot <- rbind(annot1, annot2)
+rownames(final_annot) <- c("poi", "baits")
+
+title <- sprintf("Normalized gene expression\nPOI genes in Top %d: %d/%d", 
+                 n, 
+                 sum(poi %in% head(rownames(Candidates), n)), 
+                 length(found)-4)
+
+heatmap.2x(cor(t(d)), 
+          trace="none", 
+          scale="none",
+          col=bluered(100),
+          density.info="none",
+          ColSideColors=final_annot,
+          margins =c(15,15),
+          key=FALSE,
+          labRow=NA,
+          breaks <- seq(-1, 1, length.out = 100), 
+          main=title)
+
+```
+```{r}
+dim(cor(t(d)))
+```
+
+
+```{r, fig.width=15, fig.height=8}
+# More weight to the components that explain more variance:
+dim(bla1 <- spls_res$scores %*% t(spls_res$loadings))
+dim(bla2 <- spls_res$Yscores %*% t(spls_res$Yloadings))
+
+bla3 <- t(cbind(bla1, bla2))
+
+n <- 40
+poi <- found
+top_n <- c(head(rownames(Candidates), n), baits)
+
+annot1 <- rep("white", length(top_n))
+annot1[top_n %in% found] <- "green"
+annot2 <- rep("white", length(top_n))
+annot2[top_n %in% baits] <- "blue"
+
+
+d <- bla3[top_n, ]
+final_annot <- rbind(annot1, annot2)
+rownames(final_annot) <- c("poi", "baits")
+
+title <- sprintf("Reinflated MASCARA\nPOI genes in Top %d: %d/%d", 
+                 n, 
+                 sum(poi %in% head(rownames(Candidates), n)), 
+                 length(found)-4)
+
+heatmap.2x(cor(t(d)), 
+          trace="none", 
+          scale="none",
+          col=bluered(100),
+          density.info="none",
+          ColSideColors=final_annot,
+          margins =c(15,15),
+          key=FALSE,
+          labRow=NA,
+          breaks <- seq(-1, 1, length.out = 100), 
+          main=title)
+
+
+```
+
+```{r}
+dim(bla1 <- spls_res$scores %*% t(spls_res$loadings))
+dim(bla2 <- spls_res$Yscores %*% t(spls_res$Yloadings))
+
+bla3 <- t(cbind(bla1, bla2))
+```
+
+
+```{r, fig.height=5, fig.width=10}
+poi_genes <- found
+
+top_cand <- head(rownames(Candidates), 50)
+top_cand <- top_cand[!(top_cand %in% baits)]
+
+set.seed(123)
+other <- sample(rownames(Candidates), 1000)
+
+
+####################################### ASCA residuals
+
+cor_to_list <- function(x){
+  x[upper.tri(x, diag=TRUE)] <- NA
+  x <- unlist(as.list(x))
+  x[!is.na(x)]
+}
+cor_val <- function(x){
+  cor_res <- cor(x[])
+  cor_res <- 0.5*log((1+cor_res)/(1-cor_res))
+  return(cor_res)
+}
+
+# POI
+cor_list_poi <- cor_to_list(cor_val(t(resids_t[poi_genes,])))
+
+# TOPN
+cor_list_topn <- cor_to_list(cor_val(t(resids_t[top_cand,])))
+
+# OTHER
+cor_list_other <- cor_to_list(cor_val(t(resids_t[other,])))
+
+# Baits
+cor_list_baits <- cor_to_list(cor_val(t(resids_t[baits,])))
+  
+
+# ggplot() + geom_density(aes(x=cor_list_poi)) + geom_density(aes(x=cor_list_other, col="red"))
+gene_exp_correls_fig1 <- list(poi=cor_list_poi, other=cor_list_other, baits=cor_list_baits) |> melt(na.rm = TRUE) |> 
+  ggplot(aes(x=value)) + 
+  geom_density(aes(col=L1)) + 
+  xlim(c(-1.1,1.5)) + 
+  ggtitle("ASCA residuals") + 
+  xlab("Correlation") + xlim(-1.5, 1.5)+
+  theme(legend.title=element_blank()) + ylim(0, 12)
+
+gene_exp_correls_fig1
+####################################### Normalized gene expression
+
+# POI
+cor_list_poi <- cor_to_list(cor_val(t(counts.sub[poi_genes,])))
+
+# TOPN
+cor_list_topn <- cor_to_list(cor_val(t(counts.sub[top_cand,])))
+
+# OTHER
+cor_list_other <- cor_to_list(cor_val(t(counts.sub[other,])))
+
+cor_list_baits <- cor_to_list(cor_val(t(counts.sub[baits,])))
+
+# ggplot() + geom_density(aes(x=cor_list_poi)) + geom_density(aes(x=cor_list_other, col="red"))
+gene_exp_correls_fig2 <- list(poi=cor_list_poi, other=cor_list_other, baits=cor_list_baits) |> melt(na.rm = TRUE) |> 
+  ggplot(aes(x=value)) + 
+  geom_density(aes(col=L1)) + 
+  xlim(c(-1.0,1.5)) + 
+  ggtitle("Normalized gene expression") +
+  xlab("Correlation") + xlim(-1.5, 1.5)+ ylim(0, 12)+
+  theme(legend.title=element_blank())
+
+
+####################################### Reinflated MASCARA
+
+# POI
+cor_list_poi <- cor_to_list(cor_val(t(bla3[poi_genes,])))
+
+# TOPN
+cor_list_topn <- cor_to_list(cor_val(t(bla3[top_cand,])))
+
+# OTHER
+cor_list_other <- cor_to_list(cor_val(t(bla3[other,])))
+
+cor_list_baits <- cor_to_list(cor_val(t(bla3[baits,])))
+
+# ggplot() + geom_density(aes(x=cor_list_poi)) + geom_density(aes(x=cor_list_other, col="red"))
+gene_exp_correls_fig3 <- list(poi=cor_list_poi, other=cor_list_other, baits=cor_list_baits) |> melt(na.rm = TRUE) |>
+  ggplot(aes(x=value)) +
+  geom_density(aes(col=L1)) +
+  ggtitle("MASCARA reinflated") +
+  xlab("Correlation") +
+  theme(legend.title=element_blank()) +xlim(-1.5, 5)
+
+gene_exp_correls_fig3
+
+######################################
+(gene_exp_correls_fig2 + gene_exp_correls_fig1 + gene_exp_correls_fig3)+ plot_annotation(tag_levels = "a") 
+```
+```{r}
+baits
+```
+
+
+```{r}
+poi_genes <- found
+
+top_cand <- head(rownames(Candidates), 50)
+top_cand <- top_cand[!(top_cand %in% baits)]
+
+set.seed(123)
+other <- sample(rownames(Candidates), 1000)
+
+
+####################################### ASCA residuals
+
+cor_to_list <- function(x){
+  x[upper.tri(x, diag=TRUE)] <- NA
+  x <- unlist(as.list(x))
+  x[!is.na(x)]
+}
+cor_val <- function(x){
+  cor_res <- cor(x[])
+  cor_res <- 0.5*log((1+cor_res)/(1-cor_res))
+  return(cor_res)
+}
+
+# POI
+cor_list_poi <- cor_to_list(cor(t(resids_t[poi_genes,])))
+
+# TOPN
+cor_list_topn <- cor_to_list(cor(t(resids_t[top_cand,])))
+
+# OTHER
+cor_list_other <- cor_to_list(cor(t(resids_t[other,])))
+
+# Baits
+cor_list_baits <- cor_to_list(cor(t(resids_t[baits,])))
+  
+
+# ggplot() + geom_density(aes(x=cor_list_poi)) + geom_density(aes(x=cor_list_other, col="red"))
+gene_exp_correls_fig1 <- list(poi=cor_list_poi, other=cor_list_other, baits=cor_list_baits) |> melt(na.rm = TRUE) |> 
+  ggplot(aes(x=value)) + 
+  geom_density(aes(col=L1)) + 
+  xlim(c(-1.1,1.5)) + 
+  ggtitle("ASCA residuals") + 
+  xlab("Correlation") + xlim(-1.5, 1.5)+
+  theme(legend.title=element_blank()) + ylim(0, 12)
+
+gene_exp_correls_fig1
+####################################### Normalized gene expression
+
+# POI
+cor_list_poi <- cor_to_list(cor(t(counts.sub[poi_genes,])))
+
+# TOPN
+cor_list_topn <- cor_to_list(cor(t(counts.sub[top_cand,])))
+
+# OTHER
+cor_list_other <- cor_to_list(cor(t(counts.sub[other,])))
+
+cor_list_baits <- cor_to_list(cor(t(counts.sub[baits,])))
+
+# ggplot() + geom_density(aes(x=cor_list_poi)) + geom_density(aes(x=cor_list_other, col="red"))
+gene_exp_correls_fig2 <- list(poi=cor_list_poi, other=cor_list_other, baits=cor_list_baits) |> melt(na.rm = TRUE) |> 
+  ggplot(aes(x=value)) + 
+  geom_density(aes(col=L1)) + 
+  xlim(c(-1.0,1.5)) + 
+  ggtitle("Normalized gene expression") +
+  xlab("Correlation") + xlim(-1.5, 1.5)+ ylim(0, 12)+
+  theme(legend.title=element_blank())
+
+
+####################################### Reinflated MASCARA
+
+# POI
+cor_list_poi <- cor_to_list(cor(t(bla3[poi_genes,])))
+
+# TOPN
+cor_list_topn <- cor_to_list(cor(t(bla3[top_cand,])))
+
+# OTHER
+cor_list_other <- cor_to_list(cor(t(bla3[other,])))
+
+cor_list_baits <- cor_to_list(cor(t(bla3[baits,])))
+
+# ggplot() + geom_density(aes(x=cor_list_poi)) + geom_density(aes(x=cor_list_other, col="red"))
+gene_exp_correls_fig3 <- list(poi=cor_list_poi, other=cor_list_other, baits=cor_list_baits) |> melt(na.rm = TRUE) |>
+  ggplot(aes(x=value)) +
+  geom_density(aes(col=L1)) +
+  ggtitle("MASCARA reinflated") +
+  xlab("Correlation") +
+  theme(legend.title=element_blank()) 
+
+gene_exp_correls_fig3
+
+######################################
+(gene_exp_correls_fig2 + gene_exp_correls_fig1 + gene_exp_correls_fig3) + plot_annotation(tag_levels = "a")
+```
+
+```{r}
+cor_val <- function(x){
+  cor_res <- cor(x[])
+  cor_res <- 0.5*log((1+cor_res)/(1-cor_res))
+  return(cor_res)
+}
+```
+
+```{r}
+r <- cor(t(bla3[baits,]))
+
+0.5 * log((1+r)/(1-r))
+```
+
+
+```{r, fig.width=15, fig.height=8}
+poi <- found
+n <- 50
+top_n <- head(rownames(Candidates), n)
+
+poi_without_baits <- poi[!(poi %in% baits)]
+
+poi_not_found <- poi_without_baits[!(poi_without_baits %in% top_n)]
+poi_found <- poi_without_baits[poi_without_baits %in% top_n]
+
+# Top N + all pathway genes:
+selection <- unique(c(top_n, found))
+
+annot1 <- rep("white", length(selection))
+annot1[selection %in% poi] <- "green"
+annot1[selection %in% poi_not_found] <- "red"
+
+annot2 <- rep("white", length(selection))
+annot2[selection %in% baits] <- "blue"
+
+
+d <- resids_t[selection, ]
+final_annot <- rbind(annot1, annot2)
+rownames(final_annot) <- c("poi", "baits")
+
+title <- sprintf("Residuals of gene expression\nPOI genes in Top %d: %d/%d", 
+                 n, 
+                 sum(poi %in% head(rownames(Candidates), n)), 
+                 length(found)-4)
+library(heatmap.2x)
+heatmap.2x(cor(t(d)), 
+          trace="none", 
+          scale="none",
+          col=bluered(100),
+          density.info="none",
+          ColSideColors=final_annot,
+          margins =c(15,15),
+          key=FALSE,
+          labRow=NA,
+          breaks <- seq(-1, 1, length.out = 100), 
+          main=title)
+```
+
+```{r}
+sprintf("POI genes in Top %d: %d/%d", n, sum(poi %in% head(rownames(Candidates), n)), length(found)-4)
+```
+
+```{r}
+Candidates
+```
+
+
+```{r}
+X <- resids[,-which(colnames(resids) %in% baits)]
+y <- resids[,which(colnames(resids) %in% baits)]
+spls_res <- simpls.fit(X, y, ncomp = 5)
+
+dim(bla1 <- (spls_res$loadings %*% t(spls_res$scores)) * (spls_res$Xvar / spls_res$Xtotvar ))
+dim(bla2 <- (spls_res$Yloadings %*% t(spls_res$Yscores)) * (spls_res$Xvar / spls_res$Xtotvar ))
+
+bla3 <- t(rbind(bla1, bla2))
+
+# dim(reinflated_x <- (spls_res$scores %*% t(spls_res$loadings))   * (spls_res$Xvar / spls_res$Xtotvar ))
+#  dim(reinflated_y <- (spls_res$Yscores %*% t(spls_res$Yloadings)) * (spls_res$Xvar / spls_res$Xtotvar ))
+dim(reinflated_all <- rbind(bla1, bla2))
+
+q_bar <- colMeans(spls_res$Yloadings)
+R <- spls_res$projection
+R_TP <- (dot(t(R),q_bar)/dot(q_bar,q_bar))
+  
+Candidates <- as.data.frame(R_TP[order(R_TP, decreasing = TRUE)])
+
+poi <- found
+n <- 50
+top_n <- head(rownames(Candidates), n)
+
+poi_without_baits <- poi[!(poi %in% baits)]
+
+poi_not_found <- poi_without_baits[!(poi_without_baits %in% top_n)]
+poi_found <- poi_without_baits[poi_without_baits %in% top_n]
+
+# Top N + all pathway genes:
+selection <- unique(c(top_n, found))
+
+annot1 <- rep("white", length(selection))
+annot1[selection %in% poi] <- "green"
+annot1[selection %in% poi_not_found] <- "red"
+
+annot2 <- rep("white", length(selection))
+annot2[selection %in% baits] <- "blue"
+
+
+
+d <- reinflated_all[selection, ]
+final_annot <- rbind(annot1, annot2)
+rownames(final_annot) <- c("poi", "baits")
+
+title <- sprintf("MASCARA inflated gene expression\nPOI genes in Top %d: %d/%d", 
+                 n, 
+                length(poi_found), 10)
+
+library(heatmap.2x)
+heatmap.2x(cor(t(d)), 
+          trace="none", 
+          scale="none",
+          col=bluered(1000),
+          density.info="none",
+          ColSideColors=final_annot,
+          margins =c(15,5),
+          key=FALSE,
+          dendrogram="column",
+          labRow = NA,
+          main=title)
+```
+```{r}
+?heatmap.2x
+```
+
+
+```{r}
+blue_gene <- "gene:Solyc04g011600.5"
+red_gene <- "gene:Solyc05g051550.2"
+```
+
+```{r}
+library(scales)
+name1 <-blue_gene
+name2 <- red_gene
 # Corrected counts (residuals)
 df1 <- data.frame(gene1=resids_t[name1, ], 
                   gene2=resids_t[name2, ], 
@@ -338,12 +873,18 @@ df2 <- data.frame(gene1=counts.sub[name1, ],
 cor2 <- round(cor(df2$gene1, df2$gene2),2)
 
 
+# MASCARA
+df3 <- data.frame(gene1=reinflated_all[name1, ], 
+                  gene2=reinflated_all[name2, ], 
+                  Celltype = meta.sub$SCINA)
+cor3 <- round(cor(df3$gene1, df3$gene2),2)
+
 # P1
 p1 <- ggplot(data=df1, aes(gene1, gene2)) + 
   geom_point(aes(colour=Celltype), alpha = 0.5) + 
   xlab(paste0("Bait: ", name1)) +
   ylab(paste0("Candidate: ", name2)) +
-  ggtitle(paste0("Residuals of gene expression\ncorr:", cor1)) + 
+  ggtitle(paste0("Residuals\nR:", cor1)) + 
   theme(legend.position = "none")
 
 # P2
@@ -351,12 +892,66 @@ p2 <- ggplot(data=df2, aes(gene1, gene2)) +
   geom_point(aes(colour=Celltype), alpha = 0.5) + 
   xlab(paste0("Bait: ", name1)) +
   ylab(paste0("Candidate: ", name2)) +
-  ggtitle(paste0("Gene expression \ncorr:", cor2))
+  ggtitle(paste0("Gene expression \nR:", cor2))+ 
+  theme(legend.position = "none")
+
+# P3
+p3 <- ggplot(data=df3, aes(gene1, gene2)) + 
+  geom_point(aes(colour=Celltype), alpha = 0.5) + 
+  xlab(paste0("Bait: ", name1)) +
+  ylab(paste0("Candidate: ", name2)) +
+  ggtitle(paste0("MASCARA reinflated \nR:", cor3))+ 
+  theme(legend.position = "none")
 
 
-
-(line_plot + scree_plot_pls) / (p1+p2) + plot_annotation(tag_levels = "a")
+p2+p1+p3+ plot_layout(widths = c(4, 4, 4), heights = c(4,4,4))
 ```
+
+
+```{r}
+poi <- found
+n <- 50
+top_n <- head(rownames(Candidates), n)
+
+poi_without_baits <- poi[!(poi %in% baits)]
+
+poi_not_found <- poi_without_baits[!(poi_without_baits %in% top_n)]
+poi_found <- poi_without_baits[poi_without_baits %in% top_n]
+
+# Top N + all pathway genes:
+selection <- unique(c(top_n, found))
+
+annot1 <- rep("white", length(selection))
+annot1[selection %in% poi] <- "green"
+annot1[selection %in% poi_not_found] <- "red"
+
+annot2 <- rep("white", length(selection))
+annot2[selection %in% baits] <- "blue"
+
+
+
+d <- counts.sub[selection, ]
+final_annot <- rbind(annot1, annot2)
+rownames(final_annot) <- c("poi", "baits")
+
+title <- sprintf("Normalized expression\nPOI genes in Top %d: %d/%d", 
+                 n, 
+                length(poi_found), 10)
+
+library(heatmap.2x)
+heatmap.2x(cor(t(d)), 
+          trace="none", 
+          scale="none",
+          col=bluered(100),
+          density.info="none",
+          ColSideColors=final_annot,
+          margins =c(15,15),
+          key=FALSE,
+          labRow=NA,
+          breaks <- seq(-1, 1, length.out = 100), 
+          main=title)
+```
+
 
 # 3 MASCARA on strigolactone genes
 
@@ -488,6 +1083,24 @@ ggplot(data=melted_cormat, aes(x=Var1, y=Var2, fill=value)) +
 
 ```
 
+```{r}
+cormat <- cor(t(counts.sub[found,]))
+
+melted_cormat <- melt(cormat)
+
+ggplot(data=melted_cormat, aes(x=Var1, y=Var2, fill=value)) + 
+  geom_tile() + 
+  xlab("") +
+  ylab("") +
+  geom_text(aes(label=round(value, 1)), color="white") +
+  scale_fill_gradient2(low = "#075AFF",
+                       mid = "#FFFFCC",
+                       high = "#FF0000",
+                       breaks=c(-1, 0, 1),
+                       limits=c(-1,1)) +
+  theme(axis.text.x = element_text(angle=90, vjust=.5, hjust=1))
+```
+
 ### 3.3.3 PLS + Candidates
 
 ```{r}
@@ -600,3 +1213,8 @@ p2 <- ggplot(data=df2, aes(gene1, gene2)) +
 
 p1+p2
 ```
+
+```{r}
+
+```
+
