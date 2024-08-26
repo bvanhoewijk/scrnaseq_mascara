@@ -86,7 +86,10 @@ ncol(pbmc)
 ```
 
 ```{r}
-ggplot(rowMeans(GetAssayData(pbmc))) + geom_violin()
+a <- rowMeans(GetAssayData(pbmc))
+
+a <- data.frame(means=a)
+median(a$means)
 ```
 
 
@@ -114,7 +117,31 @@ pbmc <- SCTransform(pbmc, verbose=FALSE, vars.to.regress = c("percent.MT"), retu
 ```{r}
 # These are now standard steps in the Seurat workflow for visualization and clustering
 pbmc <- RunPCA(pbmc, verbose = FALSE, features=VariableFeatures(object=pbmc))
-ElbowPlot(pbmc, ndims = 50)
+```
+```{r}
+ElbowPlot2 <- function(object, ndims=20, reduction="pca"){
+    data.use <- Stdev(object = object, reduction = reduction)
+    if (length(x = data.use) == 0) {
+        stop(paste("No standard deviation info stored for", reduction))
+    }
+    if (ndims > length(x = data.use)) {
+        warning("The object only has information for ", length(x = data.use), 
+            " reductions")
+        ndims <- length(x = data.use)
+    }
+    stdev <- "Standard Deviation"
+    plot <- ggplot(data = data.frame(dims = 1:ndims, stdev = data.use[1:ndims])) + 
+        geom_point(mapping = aes_string(x = "dims", y = "stdev")) + 
+        labs(x = gsub(pattern = "_$", replacement = "", x = Key(object = object[[reduction]])), 
+            y = stdev) + theme_classic()
+    return(plot)
+}
+```
+
+```{r}
+el <- (ElbowPlot2(pbmc, ndims = 50) + geom_vline(xintercept=15, col="red"))
+                   
+((plot1+ theme_classic()) + (plot2+ theme_classic())) /  el + plot_annotation(tag_levels = "a")
 ```
 
 

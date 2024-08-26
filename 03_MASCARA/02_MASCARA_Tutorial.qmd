@@ -101,6 +101,14 @@ ar <- ASCA_decompose(d = meta[,1:2],
 resids <- ar$residuals
 ```
 
+```{r}
+norm(resids, type = "F") / norm(sim_data, type="F") * 100
+```
+
+```{r}
+
+```
+
 ## 3.2 Correlated baits
 
 Before continuing it is a good idea to check that the set of baits are indeed correlated in the residual variance:

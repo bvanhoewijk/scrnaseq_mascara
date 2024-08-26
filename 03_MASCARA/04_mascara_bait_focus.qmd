@@ -60,6 +60,11 @@ colnames(pbmc@meta.data)
 ```{r}
 table(pbmc@meta.data$SCINA)
 ```
+```{r}
+Idents(pbmc) <- "seurat_clusters"
+DimPlot(pbmc, label = TRUE)
+```
+
 
 # 2 MASCARA on suberin genes
 
@@ -285,6 +290,17 @@ R_TP <- (dot(t(R),q_bar)/dot(q_bar,q_bar))
 Candidates <- as.data.frame(R_TP[order(R_TP, decreasing = TRUE)])
 ```
 
+```{r}
+norm(resids, type="F") 
+norm(counts.sub, type="F")
+
+norm(resids, type="F") / norm(counts.sub, type="F")
+```
+```{r}
+?norm
+```
+
+
 ### 2.3.4 Lineplot the components
 
 ```{r}
@@ -293,9 +309,9 @@ cols <- rep("gene", nrow(R))
 top10 <- head(rownames(Candidates), 10)
 # bot10 <- tail(rownames(Candidates), 10)
 
+cols[rownames(R) %in% found] <- "POI"
 cols[rownames(R) %in% top10] <- "Top 10"
 # cols[rownames(R) %in% bot10] <- "Bottom 10"
-cols[rownames(R) %in% found] <- "bait"
 to_plot =  data.frame(x=R[, 1], y=R[,2], group=as.factor(cols))
 
 
@@ -317,11 +333,7 @@ line_plot <- ggplot(R_new, aes(group=rowname)) +
              mapping=aes(x=component, y=value),col="darkgrey", alpha=0.1) +
   geom_line(data=R_new[R_new$group=="gene",], 
             mapping=aes(x=component, y=value),col="darkgrey", alpha=0.1) +
-  # Plot baits
-  geom_point(data=R_new[R_new$group=="bait",], 
-             mapping=aes(x=component, y=value, color=group)) +
-  geom_line(data=R_new[R_new$group=="bait",], 
-             mapping=aes(x=component, y=value, color=group)) +
+
   # Plot Top candidates:
   geom_point(data=R_new[R_new$group=="Top 10",], 
              mapping=aes(x=component, y=value, color=group)) + 
@@ -331,7 +343,12 @@ line_plot <- ggplot(R_new, aes(group=rowname)) +
   geom_point(data=R_new[R_new$group=="Bottom 10",], 
              mapping=aes(x=component, y=value, color=group)) + 
   geom_line(data=R_new[R_new$group=="Bottom 10",], 
-             mapping=aes(x=component, y=value, color=group))
+             mapping=aes(x=component, y=value, color=group))+
+  # Plot baits
+  geom_point(data=R_new[R_new$group=="POI",], 
+             mapping=aes(x=component, y=value, color=group)) +
+  geom_line(data=R_new[R_new$group=="POI",], 
+             mapping=aes(x=component, y=value, color=group)) 
 
 
 line_plot
@@ -392,8 +409,9 @@ p3 <- ggplot(data=df3, aes(gene1, gene2)) +
   ggtitle(paste0("Residuals\nr = ", cor2))
 
 
-
-(line_plot + scree_plot_pls) / (p1+p2+p3) + plot_annotation(tag_levels = "a")
+png(filename="line_and_resplot_singlecell.png", width=600, height=280)
+(line_plot + scree_plot_pls) + plot_annotation(tag_levels = "a")
+dev.off()
 ```
 ```{r}
 cormat <- cor(resids[,baits])
@@ -431,12 +449,19 @@ cormat2 <- ggplot(data=melted_cormat, aes(x=Var1, y=Var2, fill=value)) +
 (cormat2 | cormat1) + plot_annotation('Single cells', tag_levels = list(c("a", "b")))
 ```
 
+```{r}
+which(rownames(Candidates))
+```
+```{r}
+baits
+```
+
 
 ```{r, fig.width=15, fig.height=8}
 library(heatmap.2x)
 
 poi <- found
-n <- 50
+n <- 1500
 top_n <- c(head(rownames(Candidates), n), baits)
 
 annot1 <- rep("white", length(top_n))
@@ -780,8 +805,18 @@ sprintf("POI genes in Top %d: %d/%d", n, sum(poi %in% head(rownames(Candidates),
 ```
 
 ```{r}
-Candidates
+for (n in c(50, 100, 150, 200, 250, 300, 350, 400, 450, 550)){
+a <- sprintf("POI genes in Top %d: %d/%d\n", n, sum(poi %in% head(rownames(Candidates), n)), length(found)-4)
+cat(a)
+}
 ```
+
+```{r}
+for(item in head(rownames(Candidates), 20)){
+  cat(item, "\t", item %in% poi, "\n")
+}
+```
+
 
 
 ```{r}
@@ -883,7 +918,7 @@ cor3 <- round(cor(df3$gene1, df3$gene2),2)
 p1 <- ggplot(data=df1, aes(gene1, gene2)) + 
   geom_point(aes(colour=Celltype), alpha = 0.5) + 
   xlab(paste0("Bait: ", name1)) +
-  ylab(paste0("Candidate: ", name2)) +
+  ylab(paste0("Gene: ", name2)) +
   ggtitle(paste0("Residuals\nR:", cor1)) + 
   theme(legend.position = "none")
 
@@ -891,7 +926,7 @@ p1 <- ggplot(data=df1, aes(gene1, gene2)) +
 p2 <- ggplot(data=df2, aes(gene1, gene2)) + 
   geom_point(aes(colour=Celltype), alpha = 0.5) + 
   xlab(paste0("Bait: ", name1)) +
-  ylab(paste0("Candidate: ", name2)) +
+  ylab(paste0("Gene: ", name2)) +
   ggtitle(paste0("Gene expression \nR:", cor2))+ 
   theme(legend.position = "none")
 
@@ -899,12 +934,15 @@ p2 <- ggplot(data=df2, aes(gene1, gene2)) +
 p3 <- ggplot(data=df3, aes(gene1, gene2)) + 
   geom_point(aes(colour=Celltype), alpha = 0.5) + 
   xlab(paste0("Bait: ", name1)) +
-  ylab(paste0("Candidate: ", name2)) +
+  ylab(paste0("Gene: ", name2)) +
   ggtitle(paste0("MASCARA reinflated \nR:", cor3))+ 
   theme(legend.position = "none")
 
-
-p2+p1+p3+ plot_layout(widths = c(4, 4, 4), heights = c(4,4,4))
+png(filename="gene_plot1.png", width=600, height=600)
+plotje <- p2+p1+p3+ plot_layout(widths = c(5, 5, 5), heights = c(6,6,6)) + plot_annotation(tag_levels = "a")
+plotje
+dev.off()
+plotje
 ```
 
 
