@@ -4,18 +4,18 @@ This repo contains all the custom code for my master project at the UvA (Univers
 
 Folder contents:
 - 01_playground
- - Test playground for various scripts and data
+  - Test playground for various scripts and data
 
 - 02_scRNA_analysis
- - Primary analysis for scRNA data analysis
- - Reference gff files
- - gene signature lists
+  - Primary analysis for scRNA data analysis
+  - Reference gff files
+  - gene signature lists
 
 - 03_MASCARA
- - Markdown files for MASCARA analysis using results from 03
+  - Markdown files for MASCARA analysis using results from 03
 
 - 04_normal_WGCNA_tutorial
-  - Tutorial I found about WGCNA (unfinished)
+   - Tutorial I found about WGCNA (unfinished)
 
 - 05_hdWGCNA
-  - Playground for hdWGCNA and meta-cells approaches
+   - Playground for hdWGCNA and meta-cells approaches
