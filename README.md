@@ -24,3 +24,8 @@ Folder contents:
 
 - 05_hdWGCNA
    - Playground for hdWGCNA and meta-cells approaches
+
+
+This work relies heavily on the code of Fred White et al.:
+
+- https://github.com/BiosystemsDataAnalysis/MASCARA
