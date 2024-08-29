@@ -15,9 +15,12 @@ Folder contents:
   - Primary analysis for scRNA data analysis
   - Reference gff files
   - gene signature lists
+  - 01_seurat_analysis_rep12_article.qmd: Attempt to reproduce some of the results from the article
+  - 02_tomato_rep12_seurat.qmd: Primary data analysis and cell type assignments
 
 - 03_MASCARA
-  - Markdown files for MASCARA analysis using results from 03
+  - Markdown files for MASCARA on scRNA data.
+  - Most of the work for the thesis is in "04_mascara_bait_focus.qmd"
 
 - 04_normal_WGCNA_tutorial
    - Tutorial I found about WGCNA (unfinished)
@@ -26,6 +29,6 @@ Folder contents:
    - Playground for hdWGCNA and meta-cells approaches
 
 
-This work relies heavily on the code of Fred White et al.:
+This work relies heavily on the work of Fred White et al.:
 
 - https://github.com/BiosystemsDataAnalysis/MASCARA
