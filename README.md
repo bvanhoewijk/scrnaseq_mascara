@@ -34,4 +34,6 @@ Folder contents:
 
 This work relies heavily on the work of Fred White et al.:
 
-- https://github.com/BiosystemsDataAnalysis/MASCARA
+- Article: [MASCARA: coexpression analysis in data from designed experiments](https://www.biorxiv.org/content/10.1101/2024.02.29.582876v1)
+- Code: https://github.com/BiosystemsDataAnalysis/MASCARA
+
